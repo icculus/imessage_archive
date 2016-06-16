@@ -10,10 +10,6 @@ use POSIX;
 use File::Copy;
 use MIME::Base64;
 use File::Slurp;
-use HTML::Entities;
-
-# !!! FIXME: this isn't installed by default on Mac OS X and we can't probably do without.
-use Date::Manip qw(UnixDate);
 
 my $VERSION = '0.0.1';
 
@@ -126,8 +122,9 @@ sub flush_conversation {
     open(TMPEMAIL,'>',$tmpemail) or fail("Failed to open '$tmpemail': $!");
     #binmode(TMPEMAIL, ":utf8");
 
-    my $emaildate = UnixDate("epoch $outtimestamp", '%a, %d %b %Y %H:%M %Z');
-    my $localdate = UnixDate("epoch $outtimestamp", '%Y-%m-%d %H:%M:%S %Z');
+    my $emaildate = strftime('%a, %d %b %Y %H:%M %Z', localtime($outtimestamp));
+    my $localdate = strftime('%Y-%m-%d %H:%M:%S %Z', localtime($outtimestamp));
+
     my $imessageuserlongname = $longnames{-1};
 
     # !!! FIXME: make sure these don't collide.
@@ -351,8 +348,8 @@ EOF
 
 sub split_date_time {
     my $timestamp = shift;
-    my $date = UnixDate("epoch $timestamp", '%Y-%m-%d');
-    my $time = UnixDate("epoch $timestamp", '%H:%M');
+    my $date = strftime('%Y-%m-%d', localtime($timestamp));
+    my $time = strftime('%H:%M', localtime($timestamp));
     dbgprint("split $timestamp => '$date', '$time'\n");
     return ($date, $time);
 }
