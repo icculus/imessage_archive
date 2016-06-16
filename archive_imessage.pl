@@ -3,11 +3,14 @@
 use warnings;
 use strict;
 
-use Digest::SHA1 qw(sha1 sha1_hex);
+use Digest::SHA1 qw(sha1_hex);
 use DBI;
 use Encode qw( decode_utf8 );
 use POSIX;
 use File::Copy;
+use MIME::Base64;
+use File::Slurp;
+use HTML::Entities;
 
 # !!! FIXME: this isn't installed by default on Mac OS X and we can't probably do without.
 use Date::Manip qw(UnixDate);
@@ -17,7 +20,6 @@ my $VERSION = '0.0.1';
 my $gaptime = (30 * 60);
 my $timezone = strftime('%Z', localtime());
 my $now = time();
-my $tmpemail = undef;
 
 # Fixes unicode dumping to stdio...hopefully you have a utf-8 terminal by now.
 #binmode(STDOUT, ":utf8");
@@ -40,15 +42,21 @@ sub dbgprint {
 
 my $archivedir = undef;
 my $imessageuser = undef;
+my $imessageuserhost = undef;
 my $maildir = undef;
-my $writing = 0;
 
 sub fail {
     my $err = shift;
-    close(TMPEMAIL) if ($writing);
-    $writing = 0;
-    unlink($tmpemail) if (defined $tmpemail);
     die("$err\n");
+}
+
+sub archive_fname {
+    my $domain = shift;
+    my $name = shift;
+    my $combined = "$domain-$name";
+    my $hashed = sha1_hex($combined);
+    dbgprint("Hashed archived filename '$combined' to '$hashed'\n");
+    return "$archivedir/$hashed";
 }
 
 
@@ -83,43 +91,261 @@ sub flush_startid {
     return 1;
 }
 
+my %longnames = ();
+my %shortnames = ();
+
+my $outperson = undef;
 my $outmsgid = undef;
 my $outhandle_id = undef;
 my $outid = undef;
 my $outtimestamp = undef;
+my $output_text = undef;
+my $output_html = undef;
+my @output_attachments = ();
+
 sub flush_conversation {
+    return if (not defined $outmsgid);
+
     my $trash = shift;
-    return if (not defined $tmpemail);
-    if ($writing) {
-        close(TMPEMAIL);
-        $writing = 0;
-        if ($trash) {
-            dbgprint("Trashed conversation in '$tmpemail'\n");
-            unlink($tmpemail);
-            return;
+
+    dbgprint("Flushing conversation! trash=$trash\n");
+
+    if ($trash) {
+        $output_text = undef;
+        $output_html = undef;
+        @output_attachments = ();
+        return;
+    }
+
+    fail("message id went backwards?!") if ($startids{$outhandle_id} > $outmsgid);
+
+    $output_text =~ s/\A\n+//;
+    $output_text =~ s/\n+\Z//;
+
+    my $tmpemail = "$maildir/tmp/imessage-chatlog-tmp-$$.txt";
+    open(TMPEMAIL,'>',$tmpemail) or fail("Failed to open '$tmpemail': $!");
+    #binmode(TMPEMAIL, ":utf8");
+
+    my $emaildate = UnixDate("epoch $outtimestamp", '%a, %d %b %Y %H:%M %Z');
+    my $localdate = UnixDate("epoch $outtimestamp", '%Y-%m-%d %H:%M:%S %Z');
+    my $imessageuserlongname = $longnames{-1};
+
+    # !!! FIXME: make sure these don't collide.
+    my $mimesha1 = sha1_hex($output_text);
+    my $mimeboundarymixed = "mime_imessage_mixed_$mimesha1";
+    my $mimeboundaryalt = "mime_imessage_alt_$mimesha1";
+
+    my $has_attachments = scalar(@output_attachments) > 0;
+    my $content_type_mixed = "multipart/mixed; boundary=\"$mimeboundarymixed\"";
+    my $content_type_alt = "multipart/alternative; boundary=\"$mimeboundaryalt\"; charset=\"utf-8\"";
+    my $initial_content_type = $has_attachments ? $content_type_mixed : $content_type_alt;
+
+    print TMPEMAIL <<EOF
+Return-Path: <$imessageuser>
+Delivered-To: $imessageuser
+From: $imessageuserlongname <$imessageuser>
+To: $imessageuserlongname <$imessageuser>
+Date: $emaildate
+Subject: Chat with $outperson at $localdate ...
+MIME-Version: 1.0
+Content-Type: $initial_content_type
+Content-Transfer-Encoding: binary
+X-Mailer: archive_imessage.pl $VERSION
+
+This is a multipart message in MIME format.
+
+EOF
+;
+
+if (@output_attachments) {
+    print TMPEMAIL <<EOF
+--$mimeboundarymixed
+Content-Type: $content_type_alt
+Content-Transfer-Encoding: binary
+
+EOF
+;
+}
+
+    print TMPEMAIL <<EOF
+--$mimeboundaryalt
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: binary
+
+$output_text
+
+--$mimeboundaryalt
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: binary
+
+<html><head><title>Chat with $outperson at $localdate ...</title><style>
+body {
+  font-family: "Helvetica Neue";
+  font-size: 20px;
+  font-weight: normal;
+}
+
+section {
+  max-width: 450px;
+  margin: 50px auto;
+}
+section div {
+  max-width: 255px;
+  word-wrap: break-word;
+  margin-bottom: 10px;
+  line-height: 24px;
+}
+
+.clear {
+  clear: both;
+}
+
+.from-me {
+  position: relative;
+  padding: 10px 20px;
+  color: white;
+  background: #0B93F6;
+  border-radius: 25px;
+  float: right;
+}
+.from-me:before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  bottom: -2px;
+  right: -7px;
+  height: 20px;
+  border-right: 20px solid #0B93F6;
+  border-bottom-left-radius: 16px 14px;
+  transform: translate(0, -2px);
+}
+.from-me:after {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  bottom: -2px;
+  right: -56px;
+  width: 26px;
+  height: 20px;
+  background: white;
+  border-bottom-left-radius: 10px;
+  transform: translate(-30px, -2px);
+}
+.sms {
+  background: #04D74A;
+}
+.sms:before {
+  border-right: 20px solid #04D74A;
+}
+.from-them {
+  position: relative;
+  padding: 10px 20px;
+  background: #E5E5EA;
+  border-radius: 25px;
+  color: black;
+  float: left;
+}
+.from-them:before {
+  content: "";
+  position: absolute;
+  z-index: 2;
+  bottom: -2px;
+  left: -7px;
+  height: 20px;
+  border-left: 20px solid #E5E5EA;
+  border-bottom-right-radius: 16px 14px;
+  transform: translate(0, -2px);
+}
+.from-them:after {
+  content: "";
+  position: absolute;
+  z-index: 3;
+  bottom: -2px;
+  left: 4px;
+  width: 26px;
+  height: 20px;
+  background: white;
+  border-bottom-right-radius: 10px;
+  transform: translate(-30px, -2px);
+}
+</style></head><body><section>
+$output_html</section></body></html>
+
+--$mimeboundaryalt--
+
+EOF
+;
+
+    if (@output_attachments) {
+        my %used_fnames = ();
+        while (@output_attachments) {
+            my $fname = shift @output_attachments;
+            my $mimetype = shift @output_attachments;
+
+            $fname =~ s#\A\~/##;
+            $fname =~ s#\A/var/mobile/##;
+            my $hashedfname = archive_fname('MediaDomain', $fname);
+
+            $fname =~ s#\A.*/##;
+            my $tmpfname = $fname;
+            my $counter = 0;
+            while (defined $used_fnames{$tmpfname}) {
+                $counter++;
+                $tmpfname = "$counter-$fname";
+            }
+            $fname = $tmpfname;
+            $used_fnames{$fname} = 1;
+
+            my $fdata = undef;
+            if ((not defined read_file($hashedfname, buf_ref => \$fdata, binmode => ':raw')) or (not defined $fdata)) {
+                my $err = "Couldn't read attachment '$hashedfname': $!";
+                close(TMPEMAIL);
+                unlink($tmpemail);
+                fail($err);
+            }
+
+            print TMPEMAIL <<EOF
+--$mimeboundarymixed
+Content-ID: <$fname\@$imessageuserhost>
+Content-Disposition: attachment; filename="$fname"
+Content-Type: $mimetype
+Content-Transfer-Encoding: base64
+
+EOF
+;
+
+            print TMPEMAIL encode_base64($fdata);
+            print TMPEMAIL "\n";
+            $fdata = undef;
         }
 
-        fail("message id went backwards?!") if ($startids{$outhandle_id} > $outmsgid);
+        print TMPEMAIL "--$mimeboundarymixed--\n\n";
+    }
 
-        my $size = (stat($tmpemail))[7];
-        my $t = $outtimestamp;
-        my $outfile = "$t.$outid.imessage-chatlog.$imessageuser,S=$size";
-        $outfile =~ s#/#_#g;
-        $outfile = "$maildir/new/$outfile";
-        if (move($tmpemail, $outfile)) {
-            utime $t, $t, $outfile;  # force it to collection creation time.
-            dbgprint "archived '$outfile'\n";
-            system("cat $outfile") if ($debug);
-        } else {
-            unlink($outfile);
-            fail("Rename '$tmpemail' to '$outfile' failed: $!");
-        }
+    close(TMPEMAIL);
 
-        # !!! FIXME: this may cause duplicates if there's a power failure RIGHT HERE.
-        if (not flush_startid($outhandle_id, $outmsgid)) {
-            unlink($outfile);
-            fail("didn't flush startids");
-        }
+    $output_text = undef;
+    $output_html = undef;
+    @output_attachments = ();
+
+    my $size = (stat($tmpemail))[7];
+    my $t = $outtimestamp;
+    my $outfile = "$t.$outid.imessage-chatlog.$imessageuser,S=$size";
+    $outfile =~ s#/#_#g;
+    $outfile = "$maildir/new/$outfile";
+    if (move($tmpemail, $outfile)) {
+        utime $t, $t, $outfile;  # force it to collection creation time.
+        dbgprint "archived '$outfile'\n";
+        system("cat $outfile") if ($debug);
+    } else {
+        unlink($outfile);
+        fail("Rename '$tmpemail' to '$outfile' failed: $!");
+    }
+
+    # !!! FIXME: this may cause duplicates if there's a power failure RIGHT HERE.
+    if (not flush_startid($outhandle_id, $outmsgid)) {
+        unlink($outfile);
+        fail("didn't flush startids");
     }
 }
 
@@ -160,8 +386,6 @@ mkdir("$maildir/tmp", 0700);
 mkdir("$maildir/cur", 0700);
 mkdir("$maildir/new", 0700);
 
-$tmpemail = "$maildir/tmp/imessage-chatlog-tmp-$$.txt";
-
 $lastarchivetmpfname = "$maildir/tmp_imessage_last_archive_msgids.txt";
 unlink($lastarchivetmpfname);
 
@@ -185,12 +409,6 @@ if (open(LASTID,'<',$lastarchivefname)) {
     close(LASTID);
 }
 
-sub archive_fname {
-    my $domain = shift;
-    my $name = shift;
-    return "$archivedir/" . sha1_hex("$domain-$name");
-}
-
 my $dbname = archive_fname('HomeDomain', 'Library/SMS/sms.db');
 dbgprint("message database is '$dbname'\n");
 my $db = DBI->connect("DBI:SQLite:dbname=$dbname", '', '', { RaiseError => 0 })
@@ -202,10 +420,6 @@ my $addressbookdb = DBI->connect("DBI:SQLite:dbname=$addressbookdbname", '', '',
     or fail("Couldn't open addressbook database at '$archivedir/$addressbookdbname': " . $DBI::errstr);
 
 my $stmt;
-
-my %longnames = ();
-my %shortnames = ();
-
 
 dbgprint("Sorting out real names...\n");
 
@@ -315,8 +529,12 @@ if (not $lookupstmt->execute()) {
     }
 }
 
+$imessageuserhost = $imessageuser;
+$imessageuserhost =~ s/\A.*\@//;
+
 dbgprint("longname for imessageuser ($imessageuser) == " . $longnames{-1} . "\n");
 dbgprint("shortname for imessageuser ($imessageuser) == " . $shortnames{-1} . "\n");
+dbgprint("imessageuserhost == $imessageuserhost\n");
 
 $lookupstmt = undef;
 $addressbookdb->disconnect();
@@ -342,7 +560,7 @@ my $startmsgid = undef;
 my $newestmsgid = 0;
 $startid = undef;
 
-$stmt = $db->prepare('select h.id, m.ROWID, m.text, m.service, m.account, m.handle_id, m.subject, m.date, m.is_from_me, m.was_downgraded, m.is_audio_message, m.cache_has_attachments from message as m inner join handle as h on m.handle_id=h.ROWID order by m.ROWID;')
+$stmt = $db->prepare('select h.id, m.ROWID, m.text, m.service, m.account, m.handle_id, m.subject, m.date, m.is_emote, m.is_from_me, m.was_downgraded, m.is_audio_message, m.cache_has_attachments from message as m inner join handle as h on m.handle_id=h.ROWID order by m.ROWID;')
     or fail("Couldn't prepare message SELECT statement: " . $DBI::errstr);
 
 my $attachmentstmt = $db->prepare('select filename, mime_type from attachment as a inner join (select rowid,attachment_id from message_attachment_join where message_id=?) as j where a.ROWID=j.attachment_id order by j.ROWID;')
@@ -357,7 +575,7 @@ while (my @row = $stmt->fetchrow_array()) {
         }
     }
 
-    my ($idname, $msgid, $text, $service, $account, $handle_id, $subject, $date, $is_from_me, $was_downgraded, $is_audio_message, $cache_has_attachments) = @row;
+    my ($idname, $msgid, $text, $service, $account, $handle_id, $subject, $date, $is_emote, $is_from_me, $was_downgraded, $is_audio_message, $cache_has_attachments) = @row;
     next if not defined $text;
 
     # Convert from Cocoa epoch to Unix epoch (2001 -> 1970).
@@ -365,12 +583,6 @@ while (my @row = $stmt->fetchrow_array()) {
 
     # !!! FIXME: do something if defined $subject
     # !!! FIXME: do something with $service
-
-    if ($cache_has_attachments) {
-        $attachmentstmt->execute($msgid) or fail("Couldn't execute attachment lookup SELECT statement: " . $DBI::errstr);
-        while (my @attachmentrow = $attachmentstmt->fetchrow_array()) {
-        }
-    }
 
     $startmsgid = $msgid if (not defined $startmsgid);
 
@@ -408,12 +620,9 @@ while (my @row = $stmt->fetchrow_array()) {
     if (($handle_id != $lasthandle_id) or (talk_gap($lastdate, $date))) {
         flush_conversation(0);
 
-        open(TMPEMAIL,'>',$tmpemail) or fail("Failed to open '$tmpemail': $!");
-        #binmode(TMPEMAIL, ":utf8");
         $outtimestamp = $date;
         $outhandle_id = $handle_id;
         $outid = $msgid;
-        $writing = 1;
 
         $startmsgid = $msgid;
 
@@ -431,33 +640,59 @@ while (my @row = $stmt->fetchrow_array()) {
             $thisimessageuseralias = $shortnames{-1} . " ($imessageuser)";
         }
 
-        my $person = $idname;
-        if ($person ne $fullalias) {
-            $person = "$fullalias [$idname]";
+        $outperson = $idname;
+        if ($outperson ne $fullalias) {
+            $outperson = "$fullalias [$idname]";
         }
-
-        my $emaildate = UnixDate("epoch $date", '%a, %d %b %Y %H:%M %Z');
-        my $localdate = UnixDate("epoch $date", '%Y-%m-%d %H:%M:%S %Z');
-
-        print TMPEMAIL "Return-Path: <$imessageuser>\n";
-        print TMPEMAIL "Delivered-To: $imessageuser\n";
-        print TMPEMAIL "MIME-Version: 1.0\n";
-        print TMPEMAIL "Content-Type: text/plain; charset=\"utf-8\"\n";
-        print TMPEMAIL "Content-Transfer-Encoding: binary\n";
-        print TMPEMAIL "X-Mailer: archive_imessage.pl $VERSION\n";
-        print TMPEMAIL "From: " . $longnames{-1} . " <$imessageuser>\n";
-        print TMPEMAIL "To: " . $longnames{-1} . " <$imessageuser>\n";
-        print TMPEMAIL "Date: $emaildate\n";
-        print TMPEMAIL "Subject: Chat with $person at $localdate ...\n";
 
         $lasthandle_id = $handle_id;
         $lastspeaker = '';
         $lastdate = 0;
         $lastday = '';
+
+        $output_text = '';
+        $output_html = '';
+        @output_attachments = ();
     }
+
+    # UTF-8 for non-breaking space (&nbsp;). Dump it at end of line; iMessage seems to add it occasionally (maybe double-space to add a period then hit Send?).
+    $text =~ s/\xC2\xA0\Z//;
 
     # replace "/me does something" with "*does something*" ...
     $text =~ s#\A/me (.*)\Z#*$1*#m;
+
+    my $plaintext = $text;
+    my $htmltext = $text;
+
+    # Strip out the usual suspects.
+    $htmltext =~ s/\&/&amp;/g;
+    $htmltext =~ s/\</&lt;/g;
+    $htmltext =~ s/\>/&gt;/g;
+    $htmltext =~ s#\n#<br/>\n#g;
+
+    if ($is_emote) {
+        $htmltext = "<b>$htmltext</b>";
+    }
+
+    my @attachments = undef;
+    if ($cache_has_attachments) {
+        @attachments = ();
+        $attachmentstmt->execute($msgid) or fail("Couldn't execute attachment lookup SELECT statement: " . $DBI::errstr);
+        while (my @attachmentrow = $attachmentstmt->fetchrow_array()) {
+            my ($fname, $mimetype) = @attachmentrow;
+            push @output_attachments, $fname;
+            push @output_attachments, $mimetype;
+            push @attachments, $fname;
+            push @attachments, $mimetype;
+
+            my $shortfname = $fname;
+            $shortfname =~ s/\A.*\///;
+            $plaintext =~ s/\xEF\xBF\xBC/\n[attachment $shortfname]\n/;
+            $htmltext =~ s#\xEF\xBF\xBC#<img src='cid:$shortfname'\/><br/>\n#;
+
+            dbgprint("ATTACHMENT! fname=$fname shortfname=$shortfname mime=$mimetype\n");
+        }
+    }
 
     my $speaker = $is_from_me ? $thisimessageuseralias : $alias;
     #$speaker .= " [$service]" if ($service ne 'iMessage');
@@ -465,12 +700,21 @@ while (my @row = $stmt->fetchrow_array()) {
     my ($d, $t) = split_date_time($date);
 
     if ((defined $lastday) and ($lastday ne $d)) {
-        print TMPEMAIL "\n$d\n";
-        $lastspeaker = '';  # force it to redraw.
+        $output_text .= "\n$d\n";
+        $output_html .= "<p align='center'>$d</p>\n";
+        $lastspeaker = '';  # force it to redraw in the text output.
     }
 
-    print TMPEMAIL "\n$speaker:\n" if ($lastspeaker ne $speaker);
-    print TMPEMAIL "$t  $text\n";
+    my $htmlfromclass;
+    if ($is_from_me) {
+        $htmlfromclass = ($service ne 'SMS') ? 'from-me' : 'from-me sms';
+    } else {
+        $htmlfromclass = 'from-them';
+    }
+    $output_html .= "<div title='$d, $t' class='$htmlfromclass'>$htmltext</div><div class='clear'></div>\n";
+
+    $output_text .= "\n$speaker:\n" if ($lastspeaker ne $speaker);
+    $output_text .= "$t  $plaintext\n";
 
     $lastdate = $date;
     $lastday = $d;
