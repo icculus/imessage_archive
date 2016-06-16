@@ -40,6 +40,7 @@ my $archivedir = undef;
 my $imessageuser = undef;
 my $imessageuserhost = undef;
 my $maildir = undef;
+my $allow_html = undef;
 
 sub fail {
     my $err = shift;
@@ -133,8 +134,9 @@ sub flush_conversation {
     my $mimeboundaryalt = "mime_imessage_alt_$mimesha1";
 
     my $has_attachments = scalar(@output_attachments) > 0;
+    my $is_mime = $allow_html || $has_attachments;
     my $content_type_mixed = "multipart/mixed; boundary=\"$mimeboundarymixed\"";
-    my $content_type_alt = "multipart/alternative; boundary=\"$mimeboundaryalt\"; charset=\"utf-8\"";
+    my $content_type_alt = $allow_html ? "multipart/alternative; boundary=\"$mimeboundaryalt\"; charset=\"utf-8\"" : 'text/plain; charset="utf-8"';
     my $initial_content_type = $has_attachments ? $content_type_mixed : $content_type_alt;
 
     print TMPEMAIL <<EOF
@@ -149,22 +151,28 @@ Content-Type: $initial_content_type
 Content-Transfer-Encoding: binary
 X-Mailer: archive_imessage.pl $VERSION
 
-This is a multipart message in MIME format.
-
 EOF
 ;
 
-if (@output_attachments) {
-    print TMPEMAIL <<EOF
+    if ($is_mime) {
+        print TMPEMAIL "This is a multipart message in MIME format.\n\n";
+    }
+
+    if (@output_attachments) {
+        print TMPEMAIL <<EOF
 --$mimeboundarymixed
 Content-Type: $content_type_alt
 Content-Transfer-Encoding: binary
 
 EOF
 ;
-}
+    }
 
-    print TMPEMAIL <<EOF
+    if (not $allow_html) {
+        print TMPEMAIL "$output_text";
+        print TMPEMAIL "\n\n";
+    } else {
+        print TMPEMAIL <<EOF
 --$mimeboundaryalt
 Content-Type: text/plain; charset="utf-8"
 Content-Transfer-Encoding: binary
@@ -273,6 +281,8 @@ $output_html</section></body></html>
 EOF
 ;
 
+    }
+
     if (@output_attachments) {
         my %used_fnames = ();
         while (@output_attachments) {
@@ -303,7 +313,6 @@ EOF
 
             print TMPEMAIL <<EOF
 --$mimeboundarymixed
-Content-ID: <$fname\@$imessageuserhost>
 Content-Disposition: attachment; filename="$fname"
 Content-Type: $mimetype
 Content-Transfer-Encoding: base64
@@ -370,6 +379,8 @@ foreach (@ARGV) {
     $debug = 0, next if $_ eq '--no-debug';
     $redo = 1, next if $_ eq '--redo';
     $redo = 0, next if $_ eq '--no-redo';
+    $allow_html = 1, next if $_ eq '--html';
+    $allow_html = 0, next if $_ eq '--no-html';
     $archivedir = $_, next if not defined $archivedir;
     $maildir = $_, next if (not defined $maildir);
     usage();
