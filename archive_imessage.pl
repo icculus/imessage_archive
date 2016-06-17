@@ -40,7 +40,33 @@ my $archivedir = undef;
 my $imessageuser = undef;
 my $imessageuserhost = undef;
 my $maildir = undef;
-my $allow_html = undef;
+my $allow_html = 0;
+
+sub usage {
+    print STDERR "USAGE: $0 [--debug] [--redo] <backupdir> <maildir>\n";
+    print STDERR "\n";
+    print STDERR "    --debug: enable spammy debug logging to stdout.\n";
+    print STDERR "    --redo: Rebuild from scratch instead of only new bits.\n";
+    print STDERR "    backupdir: Directory holding unencrypted iPhone backup.\n";
+    print STDERR "    maildir: Path of Maildir where we write archives and metadata.\n";
+    print STDERR "\n";
+    exit(1);
+}
+
+foreach (@ARGV) {
+    $debug = 1, next if $_ eq '--debug';
+    $debug = 0, next if $_ eq '--no-debug';
+    $redo = 1, next if $_ eq '--redo';
+    $redo = 0, next if $_ eq '--no-redo';
+    $allow_html = 1, next if $_ eq '--html';
+    $allow_html = 0, next if $_ eq '--no-html';
+    $archivedir = $_, next if not defined $archivedir;
+    $maildir = $_, next if (not defined $maildir);
+    usage();
+}
+usage() if not defined $archivedir;
+usage() if not defined $maildir;
+
 
 sub fail {
     my $err = shift;
@@ -87,6 +113,15 @@ sub flush_startid {
     }
     return 1;
 }
+
+sub slurp_archived_file {
+    my ($domain, $fname, $fdataref) = @_;
+    my $hashedfname = archive_fname($domain, $fname);
+    if ((not defined read_file($hashedfname, buf_ref => $fdataref, binmode => ':raw')) or (not defined $fdataref)) {
+        fail("Couldn't read attachment '$hashedfname': $!");
+    }
+}
+
 
 my %longnames = ();
 my %shortnames = ();
@@ -289,9 +324,10 @@ EOF
             my $fname = shift @output_attachments;
             my $mimetype = shift @output_attachments;
 
+            my $fdata = undef;
             $fname =~ s#\A\~/##;
             $fname =~ s#\A/var/mobile/##;
-            my $hashedfname = archive_fname('MediaDomain', $fname);
+            slurp_archived_file('MediaDomain', $fname, \$fdata);
 
             $fname =~ s#\A.*/##;
             my $tmpfname = $fname;
@@ -302,14 +338,6 @@ EOF
             }
             $fname = $tmpfname;
             $used_fnames{$fname} = 1;
-
-            my $fdata = undef;
-            if ((not defined read_file($hashedfname, buf_ref => \$fdata, binmode => ':raw')) or (not defined $fdata)) {
-                my $err = "Couldn't read attachment '$hashedfname': $!";
-                close(TMPEMAIL);
-                unlink($tmpemail);
-                fail($err);
-            }
 
             print TMPEMAIL <<EOF
 --$mimeboundarymixed
@@ -363,30 +391,6 @@ sub split_date_time {
     return ($date, $time);
 }
 
-sub usage {
-    print STDERR "USAGE: $0 [--debug] [--redo] <backupdir> <maildir>\n";
-    print STDERR "\n";
-    print STDERR "    --debug: enable spammy debug logging to stdout.\n";
-    print STDERR "    --redo: Rebuild from scratch instead of only new bits.\n";
-    print STDERR "    backupdir: Directory holding unencrypted iPhone backup.\n";
-    print STDERR "    maildir: Path of Maildir where we write archives and metadata.\n";
-    print STDERR "\n";
-    exit(1);
-}
-
-foreach (@ARGV) {
-    $debug = 1, next if $_ eq '--debug';
-    $debug = 0, next if $_ eq '--no-debug';
-    $redo = 1, next if $_ eq '--redo';
-    $redo = 0, next if $_ eq '--no-redo';
-    $allow_html = 1, next if $_ eq '--html';
-    $allow_html = 0, next if $_ eq '--no-html';
-    $archivedir = $_, next if not defined $archivedir;
-    $maildir = $_, next if (not defined $maildir);
-    usage();
-}
-usage() if not defined $archivedir;
-usage() if not defined $maildir;
 
 # don't care if these fail.
 mkdir("$maildir", 0700);
@@ -682,21 +686,43 @@ while (my @row = $stmt->fetchrow_array()) {
         $htmltext = "<b>$htmltext</b>";
     }
 
-    my @attachments = undef;
     if ($cache_has_attachments) {
-        @attachments = ();
         $attachmentstmt->execute($msgid) or fail("Couldn't execute attachment lookup SELECT statement: " . $DBI::errstr);
         while (my @attachmentrow = $attachmentstmt->fetchrow_array()) {
             my ($fname, $mimetype) = @attachmentrow;
             push @output_attachments, $fname;
             push @output_attachments, $mimetype;
-            push @attachments, $fname;
-            push @attachments, $mimetype;
 
             my $shortfname = $fname;
             $shortfname =~ s/\A.*\///;
             $plaintext =~ s/\xEF\xBF\xBC/\n[attachment $shortfname]\n/;
-            $htmltext =~ s#\xEF\xBF\xBC#<img src='cid:$shortfname'\/><br/>\n#;
+
+            if ($allow_html) {
+                # !!! FIXME: videos need a thumbnail image to scale.
+                if ($mimetype =~ /\Aimage\//) {
+                    my $fnameimg = $fname;
+                    $fnameimg =~ s#\A\~/##;
+                    $fnameimg =~ s#\A/var/mobile/##;
+                    my $hashedfname = archive_fname('MediaDomain', $fnameimg);
+                    $fnameimg =~ s#.*/##;
+                    my $outfname = "$maildir/tmp/imessage-chatlog-tmp-$$-$msgid-$fnameimg";
+                    my $cmdline = "sips --resampleWidth 235 '$hashedfname' --out '$outfname' 1>/dev/null 2>/dev/null";
+                    dbgprint("resize image: $cmdline\n");
+                    die('sips failed') if (system($cmdline) != 0);
+                    my $fdata = undef;
+                    if ((not defined read_file($outfname, buf_ref => \$fdata, binmode => ':raw')) or (not defined $fdata)) {
+                        unlink($outfname);
+                        fail("Couldn't read attachment '$outfname': $!");
+                    }
+                    unlink($outfname);
+                    my $base64 = encode_base64($fdata);
+                    $fdata = undef;
+                    $htmltext =~ s#\xEF\xBF\xBC#<img src='data:$mimetype;base64,$base64'/><br/>\n#;
+                    $base64 = undef;
+                } else {
+                    $htmltext =~ s#\xEF\xBF\xBC#[attachment $shortfname]<br/>\n#;
+                }
+            }
 
             dbgprint("ATTACHMENT! fname=$fname shortfname=$shortfname mime=$mimetype\n");
         }
@@ -709,17 +735,20 @@ while (my @row = $stmt->fetchrow_array()) {
 
     if ((defined $lastday) and ($lastday ne $d)) {
         $output_text .= "\n$d\n";
-        $output_html .= "<p align='center'>$d</p>\n";
+        $output_html .= "<p align='center'>$d</p>\n" if ($allow_html);
         $lastspeaker = '';  # force it to redraw in the text output.
     }
 
-    my $htmlfromclass;
-    if ($is_from_me) {
-        $htmlfromclass = ($service ne 'SMS') ? 'from-me' : 'from-me sms';
-    } else {
-        $htmlfromclass = 'from-them';
+    if ($allow_html) {
+        my $htmlfromclass;
+        if ($is_from_me) {
+            $htmlfromclass = ($service ne 'SMS') ? 'from-me' : 'from-me sms';
+        } else {
+            $htmlfromclass = 'from-them';
+        }
+
+        $output_html .= "<div title='$d, $t' class='$htmlfromclass'>$htmltext</div><div class='clear'></div>\n";
     }
-    $output_html .= "<div title='$d, $t' class='$htmlfromclass'>$htmltext</div><div class='clear'></div>\n";
 
     $output_text .= "\n$speaker:\n" if ($lastspeaker ne $speaker);
     $output_text .= "$t  $plaintext\n";
