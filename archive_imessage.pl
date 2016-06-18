@@ -570,15 +570,17 @@ my $alias = undef;
 my $thisimessageuseralias = $shortnames{-1};
 my $startmsgid = undef;
 my $newestmsgid = 0;
-$startid = undef;
 
-$stmt = $db->prepare('select h.id, m.ROWID, m.text, m.service, m.account, m.handle_id, m.subject, m.date, m.is_emote, m.is_from_me, m.was_downgraded, m.is_audio_message, m.cache_has_attachments from message as m inner join handle as h on m.handle_id=h.ROWID order by m.ROWID;')
+$stmt = $db->prepare('select h.id, m.ROWID, m.text, m.service, m.account, m.handle_id, m.subject, m.date, m.is_emote, m.is_from_me, m.was_downgraded, m.is_audio_message, m.cache_has_attachments from message as m inner join handle as h on m.handle_id=h.ROWID where (m.ROWID > ?) order by m.handle_id, m.ROWID;')
     or fail("Couldn't prepare message SELECT statement: " . $DBI::errstr);
 
 my $attachmentstmt = $db->prepare('select filename, mime_type from attachment as a inner join (select rowid,attachment_id from message_attachment_join where message_id=?) as j where a.ROWID=j.attachment_id order by j.ROWID;')
     or fail("Couldn't prepare attachment lookup SELECT statement: " . $DBI::errstr);
 
-$stmt->execute() or fail("Couldn't execute message SELECT statement: " . $DBI::errstr);
+$stmt->execute($startid) or fail("Couldn't execute message SELECT statement: " . $DBI::errstr);
+
+$startid = undef;
+
 while (my @row = $stmt->fetchrow_array()) {
     if ($debug) {
         dbgprint("New row:\n");
@@ -609,8 +611,8 @@ while (my @row = $stmt->fetchrow_array()) {
     if (($now - $date) < $gaptime) {
         dbgprint("timestamp '$date' is less than $gaptime seconds old.\n");
         if ((not defined $startid) or ($msgid < $startid)) {
-            dbgprint("forcing global startid to $startid\n");
             $startid = ($startmsgid-1);
+            dbgprint("forcing global startid to $startid\n");
         }
         # trash this conversation, it might still be ongoing.
         flush_conversation(1) if ($handle_id == $lasthandle_id);
