@@ -117,9 +117,18 @@ sub flush_startid {
 sub slurp_archived_file {
     my ($domain, $fname, $fdataref) = @_;
     my $hashedfname = archive_fname($domain, $fname);
+
+    if (not -f $hashedfname) {
+        print STDERR "WARNING: Missing attachment '$hashedfname' ('$domain', '$fname')\n";
+        $$fdataref = '[MISSING]';
+        return 0;
+    }
+
     if ((not defined read_file($hashedfname, buf_ref => $fdataref, binmode => ':raw')) or (not defined $fdataref)) {
         fail("Couldn't read attachment '$hashedfname': $!");
     }
+
+    return 1;
 }
 
 
@@ -327,7 +336,7 @@ EOF
             my $fdata = undef;
             $fname =~ s#\A\~/##;
             $fname =~ s#\A/var/mobile/##;
-            slurp_archived_file('MediaDomain', $fname, \$fdata);
+            my $slurped = slurp_archived_file('MediaDomain', $fname, \$fdata);
 
             $fname =~ s#\A.*/##;
             my $tmpfname = $fname;
@@ -339,7 +348,20 @@ EOF
             $fname = $tmpfname;
             $used_fnames{$fname} = 1;
 
-            print TMPEMAIL <<EOF
+            if (not $slurped) {
+                print TMPEMAIL <<EOF
+--$mimeboundarymixed
+Content-Disposition: attachment; filename="$fname"
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: binary
+
+This file was missing in the iPhone backup (or there was a bug) when this
+archive was produced. Sorry!
+
+EOF
+;
+            } else {
+                print TMPEMAIL <<EOF
 --$mimeboundarymixed
 Content-Disposition: attachment; filename="$fname"
 Content-Type: $mimetype
@@ -348,9 +370,10 @@ Content-Transfer-Encoding: base64
 EOF
 ;
 
-            print TMPEMAIL encode_base64($fdata);
-            print TMPEMAIL "\n";
-            $fdata = undef;
+                print TMPEMAIL encode_base64($fdata);
+                print TMPEMAIL "\n";
+                $fdata = undef;
+            }
         }
 
         print TMPEMAIL "--$mimeboundarymixed--\n\n";
