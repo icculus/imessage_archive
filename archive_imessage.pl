@@ -879,7 +879,14 @@ while (my @row = $stmt->fetchrow_array()) {
 }
 
 $db->disconnect();
+
+# Flush the final conversation if it's older than the talk gap.
+if (($lastdate > 0) && talk_gap($lastdate, $now)) {
+    dbgprint("Flushing last conversation.\n");
+    $startid = $ending_startid;  # Just flush this here with the conversation.
+    flush_conversation(0);
+}
+
 exit(0);
 
 # end of archive_imessage.pl ...
-
