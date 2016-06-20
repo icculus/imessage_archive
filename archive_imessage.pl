@@ -34,8 +34,6 @@ $SIG{INT} = \&signal_catcher;
 $SIG{TERM} = \&signal_catcher;
 $SIG{HUP} = \&signal_catcher;
 
-my $redo = 0;
-
 my $debug = 0;
 sub dbgprint {
     print @_ if $debug;
@@ -55,7 +53,6 @@ sub usage {
     print STDERR "USAGE: $0 [...options...] <backupdir> <maildir>\n";
     print STDERR "\n";
     print STDERR "    --debug: Enable spammy debug logging to stdout.\n";
-    print STDERR "    --redo: Rebuild from scratch instead of only new bits.\n";
     print STDERR "    --html: Output HTML archives.\n";
     print STDERR "    --progress: Print progress to stdout.\n";
     print STDERR "    --attachments-shrink-percent=NUM: resize videos/images to NUM percent.\n";
@@ -73,8 +70,6 @@ sub usage {
 foreach (@ARGV) {
     $debug = 1, next if $_ eq '--debug';
     $debug = 0, next if $_ eq '--no-debug';
-    $redo = 1, next if $_ eq '--redo';
-    $redo = 0, next if $_ eq '--no-redo';
     $allow_html = 1, next if $_ eq '--html';
     $allow_html = 0, next if $_ eq '--no-html';
     $report_progress = 1, next if $_ eq '--progress';
@@ -482,7 +477,6 @@ $lastarchivetmpfname = "$maildir/tmp_imessage_last_archive_msgids.txt";
 unlink($lastarchivetmpfname);
 
 $lastarchivefname = "$maildir/imessage_last_archive_msgids.txt";
-unlink($lastarchivefname) if ($redo);
 if (open(LASTID,'<',$lastarchivefname)) {
     my $globalid = <LASTID>;
     chomp($globalid);
