@@ -114,15 +114,19 @@ my $lastarchivetmpfname = undef;
 
 sub flush_startid {
     my ($with, $msgid) = @_;
-    $startids{$with} = $msgid;
-    my $startval = 0;
-    $startval = $startid if (defined $startid);
-    dbgprint("flushing startids (global: $startval, '$with': $msgid)\n");
+
+    if (defined $with and defined $msgid) {
+        $startids{$with} = $msgid;
+        dbgprint("flushing startids (global: $startid, '$with': $msgid)\n");
+    } else {
+        dbgprint("flushing startids (global: $startid)\n");
+    }
+
     if (not open(LASTID,'>',$lastarchivetmpfname)) {
         dbgprint("Open '$lastarchivetmpfname' for write failed: $!\n");
         return 0;
     }
-    print LASTID "$startval\n";
+    print LASTID "$startid\n";
     foreach(keys %startids) {
         my $key = $_;
         my $val = $startids{$key};
@@ -652,6 +656,14 @@ my $newestmsgid = 0;
 my $donerows = 0;
 my $totalrows = undef;
 my $percentdone = -1;
+
+$stmt = $db->prepare('select ROWID from message order by ROWID desc limit 1;') or fail("Couldn't prepare row count SELECT statement: " . $DBI::errstr);
+$stmt->execute() or fail("Couldn't execute row count SELECT statement: " . $DBI::errstr);
+my $ending_startid = $startid;
+if (my @row = $stmt->fetchrow_array()) {
+    $ending_startid = $row[0];
+}
+
 if ($report_progress) {
     $stmt = $db->prepare('select count(*) from message where (ROWID > ?)') or fail("Couldn't prepare message count SELECT statement: " . $DBI::errstr);
     $stmt->execute($startid) or fail("Couldn't execute message count SELECT statement: " . $DBI::errstr);
@@ -666,9 +678,6 @@ my $attachmentstmt = $db->prepare('select filename, mime_type from attachment as
     or fail("Couldn't prepare attachment lookup SELECT statement: " . $DBI::errstr);
 
 $stmt->execute($startid) or fail("Couldn't execute message SELECT statement: " . $DBI::errstr);
-
-
-$startid = undef;
 
 while (my @row = $stmt->fetchrow_array()) {
     if ($debug) {
@@ -705,9 +714,9 @@ while (my @row = $stmt->fetchrow_array()) {
 
     if (($now - $date) < $gaptime) {
         dbgprint("timestamp '$date' is less than $gaptime seconds old.\n");
-        if ((not defined $startid) or ($msgid < $startid)) {
-            $startid = ($startmsgid-1);
-            dbgprint("forcing global startid to $startid\n");
+        if ($msgid < $ending_startid) {
+            $ending_startid = ($startmsgid-1);
+            dbgprint("forcing global startid to $ending_startid\n");
         }
         # trash this conversation, it might still be ongoing.
         flush_conversation(1) if ($handle_id == $lasthandle_id);
@@ -885,6 +894,12 @@ if (($lastdate > 0) && talk_gap($lastdate, $now)) {
     dbgprint("Flushing last conversation.\n");
     $startid = $ending_startid;  # Just flush this here with the conversation.
     flush_conversation(0);
+}
+
+# Update the global startid.
+if ($ending_startid != $startid) {
+    $startid = $ending_startid;
+    flush_startid(undef, undef);
 }
 
 exit(0);
