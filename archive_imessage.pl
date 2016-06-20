@@ -689,9 +689,6 @@ while (my @row = $stmt->fetchrow_array()) {
     # Convert from Cocoa epoch to Unix epoch (2001 -> 1970).
     $date += 978307200;
 
-    # !!! FIXME: do something if defined $subject
-    # !!! FIXME: do something with $service
-
     $startmsgid = $msgid if (not defined $startmsgid);
 
     if (not defined $startids{$handle_id}) {
@@ -761,6 +758,20 @@ while (my @row = $stmt->fetchrow_array()) {
         $output_text = '';
         $output_html = '';
         @output_attachments = ();
+
+        if (defined $subject) {
+            chomp($subject);
+            $subject =~ s/\A\s+//;
+            $subject =~ s/\s+\Z//;
+            if (($subject eq '') || ($subject eq 'Re:')) {
+                $subject = undef;
+            }
+        }
+
+        if (defined $subject) {
+            $output_text = "iMessage subject: $subject\n\n";
+            $output_html = "<p><i>$subject</i></p>\n\n";
+        }
     }
 
     # UTF-8 for non-breaking space (&nbsp;). Dump it at end of line; iMessage seems to add it occasionally (maybe double-space to add a period then hit Send?).
