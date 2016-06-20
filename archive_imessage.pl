@@ -21,6 +21,11 @@ my $now = time();
 #binmode(STDOUT, ":utf8");
 #binmode(STDERR, ":utf8");
 
+sub fail {
+    my $err = shift;
+    die("$err\n");
+}
+
 sub signal_catcher {
     my $sig = shift;
     fail("Caught signal ${sig}!");
@@ -41,12 +46,21 @@ my $imessageuser = undef;
 my $imessageuserhost = undef;
 my $maildir = undef;
 my $allow_html = 0;
+my $report_progress = 0;
+my $attachment_shrink_percent = undef;
+my $allow_attachments = 1;
+my $allow_thumbnails = 1;
 
 sub usage {
-    print STDERR "USAGE: $0 [--debug] [--redo] <backupdir> <maildir>\n";
+    print STDERR "USAGE: $0 [...options...] <backupdir> <maildir>\n";
     print STDERR "\n";
-    print STDERR "    --debug: enable spammy debug logging to stdout.\n";
+    print STDERR "    --debug: Enable spammy debug logging to stdout.\n";
     print STDERR "    --redo: Rebuild from scratch instead of only new bits.\n";
+    print STDERR "    --html: Output HTML archives.\n";
+    print STDERR "    --progress: Print progress to stdout.\n";
+    print STDERR "    --attachments-shrink-percent=NUM: resize videos/images to NUM percent.\n";
+    print STDERR "    --no-attachments: Don't include attachments at all.\n";
+    print STDERR "    --no-thumbnails: Don't include thumbnails in HTML output.\n";
     print STDERR "    backupdir: Directory holding unencrypted iPhone backup.\n";
     print STDERR "    maildir: Path of Maildir where we write archives and metadata.\n";
     print STDERR "\n";
@@ -60,6 +74,14 @@ foreach (@ARGV) {
     $redo = 0, next if $_ eq '--no-redo';
     $allow_html = 1, next if $_ eq '--html';
     $allow_html = 0, next if $_ eq '--no-html';
+    $report_progress = 1, next if $_ eq '--progress';
+    $report_progress = 0, next if $_ eq '--no-progress';
+    $allow_attachments = 1, next if $_ eq '--attachments';
+    $allow_attachments = 0, next if $_ eq '--no-attachments';
+    $allow_thumbnails = 1, next if $_ eq '--thumbnails';
+    $allow_thumbnails = 0, next if $_ eq '--no-thumbnails';
+    $attachment_shrink_percent = int($1), next if /\A--attachments-shrink-percent=(\d+)\Z/;
+    $report_progress = 0, next if $_ eq '--no-progress';
     $archivedir = $_, next if not defined $archivedir;
     $maildir = $_, next if (not defined $maildir);
     usage();
@@ -67,10 +89,10 @@ foreach (@ARGV) {
 usage() if not defined $archivedir;
 usage() if not defined $maildir;
 
-
-sub fail {
-    my $err = shift;
-    die("$err\n");
+if ((defined $attachment_shrink_percent) && ($attachment_shrink_percent == 100)) {
+    $attachment_shrink_percent = undef;
+} elsif ((defined $attachment_shrink_percent) && (($attachment_shrink_percent < 1) || ($attachment_shrink_percent > 100))) {
+    fail("--attachments-shrink-percent must be between 1 and 100.");
 }
 
 sub archive_fname {
@@ -124,11 +146,35 @@ sub slurp_archived_file {
         return 0;
     }
 
-    if ((not defined read_file($hashedfname, buf_ref => $fdataref, binmode => ':raw')) or (not defined $fdataref)) {
+    if ((not defined read_file($hashedfname, buf_ref => $fdataref, binmode => ':raw', err_mode => 'carp')) or (not defined $fdataref)) {
         fail("Couldn't read attachment '$hashedfname': $!");
     }
 
     return 1;
+}
+
+sub load_attachment {
+    my $origfname = shift;
+    my $hashedfname = shift;
+    my $fdataref = shift;
+    my $mimetype = shift;
+
+    my $is_image = $mimetype =~ /\Aimage\//;
+    my $is_video = $mimetype =~ /\Avideo\//;
+    if ((defined $attachment_shrink_percent) && ($is_image || $is_video)) {
+        my $fmt = ($mimetype eq 'image/jpeg') ? '-f mjpeg' : '';
+        my $fract = $attachment_shrink_percent / 100.0;
+        my $basefname = $origfname;
+        $basefname =~ s#.*/##;
+        my $outfname = "$maildir/tmp/imessage-chatlog-tmp-$$-attachment-shrink-$basefname";
+        my $cmdline = "ffmpeg $fmt -i '$hashedfname' -vf \"scale='trunc(iw*$fract)+mod(trunc(iw*$fract),2)':'trunc(ih*$fract)+mod(trunc(ih*$fract),2)'\" '$outfname' 2>/dev/null";
+        print("shrinking attachment: $cmdline\n");
+        die('ffmpeg failed') if (system($cmdline) != 0);
+        read_file($outfname, buf_ref => $fdataref, binmode => ':raw', err_mode => 'carp');
+        unlink($outfname);
+    } else {
+        read_file($hashedfname, buf_ref => $fdataref, binmode => ':raw', err_mode => 'carp');
+    }
 }
 
 
@@ -332,11 +378,19 @@ EOF
         while (@output_attachments) {
             my $fname = shift @output_attachments;
             my $mimetype = shift @output_attachments;
+            my $domain = 'MediaDomain';
 
-            my $fdata = undef;
             $fname =~ s#\A\~/##;
             $fname =~ s#\A/var/mobile/##;
-            my $slurped = slurp_archived_file('MediaDomain', $fname, \$fdata);
+            my $hashedfname = archive_fname($domain, $fname);
+
+            my $fdata = undef;
+            if (not -f $hashedfname) {
+                print STDERR "WARNING: Missing attachment '$hashedfname' ('$domain', '$fname')\n";
+            } else {
+                load_attachment($fname, $hashedfname, \$fdata, $mimetype);
+                print STDERR "WARNING: Failed to load '$hashedfname' ('$domain', '$fname')\n" if (not defined $fdata);
+            }
 
             $fname =~ s#\A.*/##;
             my $tmpfname = $fname;
@@ -348,7 +402,7 @@ EOF
             $fname = $tmpfname;
             $used_fnames{$fname} = 1;
 
-            if (not $slurped) {
+            if (not defined $fdata) {
                 print TMPEMAIL <<EOF
 --$mimeboundarymixed
 Content-Disposition: attachment; filename="$fname"
@@ -594,6 +648,16 @@ my $thisimessageuseralias = $shortnames{-1};
 my $startmsgid = undef;
 my $newestmsgid = 0;
 
+my $donerows = 0;
+my $totalrows = undef;
+my $percentdone = -1;
+if ($report_progress) {
+    $stmt = $db->prepare('select count(*) from message where (ROWID > ?)') or fail("Couldn't prepare message count SELECT statement: " . $DBI::errstr);
+    $stmt->execute($startid) or fail("Couldn't execute message count SELECT statement: " . $DBI::errstr);
+    my @row = $stmt->fetchrow_array();
+    $totalrows = $row[0];
+}
+
 $stmt = $db->prepare('select h.id, m.ROWID, m.text, m.service, m.account, m.handle_id, m.subject, m.date, m.is_emote, m.is_from_me, m.was_downgraded, m.is_audio_message, m.cache_has_attachments from message as m inner join handle as h on m.handle_id=h.ROWID where (m.ROWID > ?) order by m.handle_id, m.ROWID;')
     or fail("Couldn't prepare message SELECT statement: " . $DBI::errstr);
 
@@ -601,6 +665,7 @@ my $attachmentstmt = $db->prepare('select filename, mime_type from attachment as
     or fail("Couldn't prepare attachment lookup SELECT statement: " . $DBI::errstr);
 
 $stmt->execute($startid) or fail("Couldn't execute message SELECT statement: " . $DBI::errstr);
+
 
 $startid = undef;
 
@@ -611,6 +676,15 @@ while (my @row = $stmt->fetchrow_array()) {
             dbgprint(defined $_ ? "  $_\n" : "  [undef]\n");
         }
     }
+
+    if ($report_progress) {
+        my $newpct = int(($donerows / $totalrows) * 100.0);
+        if ($newpct != $percentdone) {
+            $percentdone = $newpct;
+            print("Processed $donerows messages of $totalrows ($percentdone%)\n");
+        }
+    }
+    $donerows++;
 
     my ($idname, $msgid, $text, $service, $account, $handle_id, $subject, $date, $is_emote, $is_from_me, $was_downgraded, $is_audio_message, $cache_has_attachments) = @row;
     next if not defined $text;
@@ -715,35 +789,42 @@ while (my @row = $stmt->fetchrow_array()) {
         $attachmentstmt->execute($msgid) or fail("Couldn't execute attachment lookup SELECT statement: " . $DBI::errstr);
         while (my @attachmentrow = $attachmentstmt->fetchrow_array()) {
             my ($fname, $mimetype) = @attachmentrow;
-            push @output_attachments, $fname;
-            push @output_attachments, $mimetype;
+
+            if ($allow_attachments) {
+                push @output_attachments, $fname;
+                push @output_attachments, $mimetype;
+            }
 
             my $shortfname = $fname;
             $shortfname =~ s/\A.*\///;
             $plaintext =~ s/\xEF\xBF\xBC/\n[attachment $shortfname]\n/;
 
             if ($allow_html) {
-                # !!! FIXME: videos need a thumbnail image to scale.
-                if ($mimetype =~ /\Aimage\//) {
+                my $is_image = $mimetype =~ /\Aimage\//;
+                my $is_video = $mimetype =~ /\Avideo\//;
+                if ($allow_thumbnails && ($is_image || $is_video)) {
                     my $fnameimg = $fname;
                     $fnameimg =~ s#\A\~/##;
                     $fnameimg =~ s#\A/var/mobile/##;
                     my $hashedfname = archive_fname('MediaDomain', $fnameimg);
                     $fnameimg =~ s#.*/##;
-                    my $outfname = "$maildir/tmp/imessage-chatlog-tmp-$$-$msgid-$fnameimg";
-                    my $cmdline = "sips --resampleWidth 235 '$hashedfname' --out '$outfname' 1>/dev/null 2>/dev/null";
-                    dbgprint("resize image: $cmdline\n");
-                    die('sips failed') if (system($cmdline) != 0);
+                    my $outfname = "$maildir/tmp/imessage-chatlog-tmp-$$-$msgid-$fnameimg.jpg";
+                    my $fmt = ($mimetype eq 'image/jpeg') ? '-f mjpeg' : '';
+                    my $cmdline = "ffmpeg $fmt -i '$hashedfname' -frames 1 -vf 'scale=235:-1' '$outfname' 2>/dev/null";
+                    print("generating thumbnail: $cmdline\n");
+                    die('ffmpeg failed') if (system($cmdline) != 0);
                     my $fdata = undef;
-                    if ((not defined read_file($outfname, buf_ref => \$fdata, binmode => ':raw')) or (not defined $fdata)) {
+                    if ((not defined read_file($outfname, buf_ref => \$fdata, binmode => ':raw', err_mode => 'carp')) or (not defined $fdata)) {
                         unlink($outfname);
-                        fail("Couldn't read attachment '$outfname': $!");
+                        print STDERR "Couldn't read scaled attachment '$outfname': $!";
+                        $htmltext =~ s#\xEF\xBF\xBC#[Failed to scale image '$fnameimg']<br/>\n#;
+                    } else {
+                        unlink($outfname);
+                        my $base64 = encode_base64($fdata);
+                        $fdata = undef;
+                        $htmltext =~ s#\xEF\xBF\xBC#<center><img src='data:$mimetype;base64,$base64'/></center><br/>\n#;
+                        $base64 = undef;
                     }
-                    unlink($outfname);
-                    my $base64 = encode_base64($fdata);
-                    $fdata = undef;
-                    $htmltext =~ s#\xEF\xBF\xBC#<img src='data:$mimetype;base64,$base64'/><br/>\n#;
-                    $base64 = undef;
                 } else {
                     $htmltext =~ s#\xEF\xBF\xBC#[attachment $shortfname]<br/>\n#;
                 }
