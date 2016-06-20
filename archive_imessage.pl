@@ -64,6 +64,9 @@ sub usage {
     print STDERR "    backupdir: Directory holding unencrypted iPhone backup.\n";
     print STDERR "    maildir: Path of Maildir where we write archives and metadata.\n";
     print STDERR "\n";
+    print STDERR "This program needs ffmpeg in your \$PATH for various tasks.\n";
+    print STDERR " Thumbnails in HTML output, and shrinking attachments both need it.\n";
+    print STDERR "\n";
     exit(1);
 }
 
