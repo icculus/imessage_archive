@@ -46,6 +46,7 @@ my $maildir = undef;
 my $allow_html = 0;
 my $report_progress = 0;
 my $attachment_shrink_percent = undef;
+my $allow_video_attachments = 1;
 my $allow_attachments = 1;
 my $allow_thumbnails = 1;
 
@@ -56,6 +57,7 @@ sub usage {
     print STDERR "    --html: Output HTML archives.\n";
     print STDERR "    --progress: Print progress to stdout.\n";
     print STDERR "    --attachments-shrink-percent=NUM: resize videos/images to NUM percent.\n";
+    print STDERR "    --no-video-attachments: Don't include image/video attachments.\n";
     print STDERR "    --no-attachments: Don't include attachments at all.\n";
     print STDERR "    --no-thumbnails: Don't include thumbnails in HTML output.\n";
     print STDERR "    backupdir: Directory holding unencrypted iPhone backup.\n";
@@ -74,6 +76,8 @@ foreach (@ARGV) {
     $allow_html = 0, next if $_ eq '--no-html';
     $report_progress = 1, next if $_ eq '--progress';
     $report_progress = 0, next if $_ eq '--no-progress';
+    $allow_video_attachments = 1, next if $_ eq '--video-attachments';
+    $allow_video_attachments = 0, next if $_ eq '--no-video-attachments';
     $allow_attachments = 1, next if $_ eq '--attachments';
     $allow_attachments = 0, next if $_ eq '--no-attachments';
     $allow_thumbnails = 1, next if $_ eq '--thumbnails';
@@ -798,7 +802,10 @@ while (my @row = $stmt->fetchrow_array()) {
         while (my @attachmentrow = $attachmentstmt->fetchrow_array()) {
             my ($fname, $mimetype) = @attachmentrow;
 
-            if ($allow_attachments) {
+            my $is_image = $mimetype =~ /\Aimage\//;
+            my $is_video = $mimetype =~ /\Avideo\//;
+
+            if (($allow_attachments) && ($allow_video_attachments || (not ($is_video || $is_image)))) {
                 push @output_attachments, $fname;
                 push @output_attachments, $mimetype;
             }
@@ -808,8 +815,6 @@ while (my @row = $stmt->fetchrow_array()) {
             $plaintext =~ s/\xEF\xBF\xBC/\n[attachment $shortfname]\n/;
 
             if ($allow_html) {
-                my $is_image = $mimetype =~ /\Aimage\//;
-                my $is_video = $mimetype =~ /\Avideo\//;
                 if ($allow_thumbnails && ($is_image || $is_video)) {
                     my $fnameimg = $fname;
                     $fnameimg =~ s#\A\~/##;
