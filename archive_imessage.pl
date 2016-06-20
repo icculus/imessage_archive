@@ -902,6 +902,10 @@ if ($ending_startid != $startid) {
     flush_startid(undef, undef);
 }
 
+if ($report_progress) {
+    print("All completed conversations archived.\n");
+}
+
 exit(0);
 
 # end of archive_imessage.pl ...
