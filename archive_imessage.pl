@@ -1085,10 +1085,13 @@ while (my @row = $stmt->fetchrow_array()) {
                     } else {
                         $fnameimg =~ s#.*/##;
                         my $orientation = get_image_orientation($hashedfname);
-                        my $outfname = "$maildir/tmp/imessage-chatlog-tmp-$$-$msgid-$fnameimg.jpg";
                         my $is_jpeg = $mimetype eq 'image/jpeg';
+                        my $is_gif = $mimetype eq 'image/gif';
+                        my $ext = $is_gif ? '.gif' : '.jpg';   # force everything to a .jpg thumbnail, except .gifs, since they are well-supported and might be animated.  # !!! FIXME: make videos into .gifs with a few frames?
+                        my $frames = $is_gif ? '' : '-frames 1';   # Force to one frame, so movies just get a static image, but let animated gifs alone.
+                        my $outfname = "$maildir/tmp/imessage-chatlog-tmp-$$-$msgid-$fnameimg.$ext";
                         my $fmt = $is_jpeg ? '-f mjpeg' : '';
-                        my $cmdline = "$program_dir/ffmpeg $fmt -i '$hashedfname' -frames 1 -vf 'scale=235:-1' '$outfname' 2>/dev/null";
+                        my $cmdline = "$program_dir/ffmpeg $fmt -i '$hashedfname' $frames -vf 'scale=235:-1' '$outfname' 2>/dev/null";
                         dbgprint("generating thumbnail: $cmdline\n");
                         die("ffmpeg failed ('$cmdline')") if (system($cmdline) != 0);
                         set_image_orientation($outfname, $orientation, 1);
