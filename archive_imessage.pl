@@ -191,7 +191,8 @@ sub slurp_archived_file {
 sub get_image_orientation {
     my $fname = shift;
     my $cmdline = "$program_dir/exiftool/exiftool -n -Orientation '$fname'";
-    my $orientation = `$cmdline` or fail("exiftool failed ('$cmdline')");
+    my $orientation = `$cmdline`;
+    fail("exiftool failed ('$cmdline')") if ($? != 0);
     chomp($orientation);
     $orientation =~ s/\AOrientation\s*\:\s*(\d*)\s*\Z/$1/;
     dbgprint("File '$fname' has an Orientation of '$orientation'.\n");
@@ -203,7 +204,7 @@ sub set_image_orientation {
     my $orientation = shift;
     my $trash = shift;
     if (defined $orientation) {
-        my $cmdline = "$program_dir/exiftool/exiftool -n -Orientation=$orientation '$fname'";
+        my $cmdline = "$program_dir/exiftool/exiftool -q -n -Orientation=$orientation '$fname'";
         dbgprint("marking image orientation: $cmdline\n");
         if (system($cmdline) != 0) {
             unlink($fname) if $trash;
