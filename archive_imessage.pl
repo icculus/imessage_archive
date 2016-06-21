@@ -773,12 +773,22 @@ $stmt = $db->prepare('select distinct account from message;')
     or fail("Couldn't prepare distinct account SELECT statement: " . $DBI::errstr);
 $stmt->execute() or fail("Couldn't execute distinct address SELECT statement: " . $DBI::errstr);
 
+my $default_account = undef;
 while (my @row = $stmt->fetchrow_array()) {
     my $account = shift @row;
+    next if not defined $account;
     my $address = $account;
     $address =~ s/\A[ep]\://i or fail("Unexpected account format '$account'");
     dbgprint("distinct account: '$account' -> '$address'\n");
     lookup_address($account, $address);
+    $default_account = $account if not defined $default_account;  # oh well.
+}
+
+if (not defined $default_account) {
+    dbgprint("Ugh, forcing a default account.\n");
+    $default_account = 'e:donotreply@icloud.com';  # oh well.
+    $longnames{$default_account} = 'Unknown User';
+    $shortnames{$default_account} = 'Unknown';
 }
 
 %mac_addressbook = ();  # dump all this, we're done with it.
@@ -892,6 +902,8 @@ while (my @row = $stmt->fetchrow_array()) {
     if (($handle_id != $lasthandle_id) or (talk_gap($lastdate, $date))) {
         flush_conversation(0);
 
+        $account = $default_account if (not defined $account); # happens on old SMS messages.
+
         $imessageuser = $account;
         if ($imessageuser =~ s/\A([ep])\://i) {
             my $type = lc($1);
@@ -903,10 +915,11 @@ while (my @row = $stmt->fetchrow_array()) {
             fail("BUG: this shouldn't have happened."); # we checked this before.
         }
 
-        $imessageuserhost = $imessageuser;
-        $imessageuserhost =~ s/\A.*\@//;
         $imessageuserlongname = $longnames{$account};
         $imessageusershortname = $shortnames{$account};
+
+        $imessageuserhost = $imessageuser;
+        $imessageuserhost =~ s/\A.*\@//;
 
         dbgprint("longname for imessageuser ($imessageuser) == $imessageuserlongname\n");
         dbgprint("shortname for imessageuser ($imessageuser) == $imessageusershortname\n");
