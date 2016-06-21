@@ -989,10 +989,9 @@ while (my @row = $stmt->fetchrow_array()) {
     }
 
     if ($is_from_me) {
+        $outhasfromme = 1;
         if ($is_sms) {
             $outhasfromme_sms = 1;
-        } else {
-            $outhasfromme = 1;
         }
     } else {
         $outhasfromthem = 1;
