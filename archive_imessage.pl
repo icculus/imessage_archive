@@ -10,6 +10,7 @@ use POSIX;
 use File::Copy;
 use MIME::Base64;
 use File::Slurp;
+use Regexp::Common qw/URI/;
 
 my $VERSION = '0.0.1';
 
@@ -293,6 +294,8 @@ EOF
         print TMPEMAIL "$output_text";
         print TMPEMAIL "\n\n";
     } else {
+        # This <style> section is largely based on:
+        #   https://codepen.io/samuelkraft/pen/Farhl/
         print TMPEMAIL <<EOF
 --$mimeboundaryalt
 Content-Type: text/plain; charset="utf-8"
@@ -334,6 +337,10 @@ section div {
   border-radius: 25px;
   float: right;
 }
+.from-me a {
+  color: white;
+  background: #0B93F6;
+}
 .from-me:before {
   content: "";
   position: absolute;
@@ -362,6 +369,10 @@ section div {
 }
 .sms:before {
   border-right: 20px solid #04D74A;
+}
+.sms a {
+  color: white;
+  background: #04D74A;
 }
 .from-them {
   position: relative;
@@ -942,6 +953,8 @@ while (my @row = $stmt->fetchrow_array()) {
     if ($is_emote) {
         $htmltext = "<b>$htmltext</b>";
     }
+
+    $htmltext =~ s/($RE{URI})/<a href="$1">$1<\/a>/g;
 
     if ($cache_has_attachments) {
         $attachmentstmt->execute($msgid) or fail("Couldn't execute attachment lookup SELECT statement: " . $DBI::errstr);
