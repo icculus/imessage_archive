@@ -44,6 +44,8 @@ sub dbgprint {
 my $archivedir = undef;
 my $imessageuser = undef;
 my $imessageuserhost = undef;
+my $imessageuserlongname = undef;
+my $imessageusershortname = undef;
 my $maildir = undef;
 my $allow_html = 0;
 my $report_progress = 0;
@@ -254,8 +256,6 @@ sub flush_conversation {
 
     my $emaildate = strftime('%a, %d %b %Y %H:%M %Z', localtime($outtimestamp));
     my $localdate = strftime('%Y-%m-%d %H:%M:%S %Z', localtime($outtimestamp));
-
-    my $imessageuserlongname = $longnames{-1};
 
     # !!! FIXME: make sure these don't collide.
     my $mimesha1 = sha1_hex($output_text);
@@ -651,11 +651,6 @@ if ($ios_archive) {
         or fail("Couldn't prepare name lookup SELECT statement: " . $DBI::errstr);
 }
 
-$stmt = $db->prepare('select m.handle_id, h.id from handle as h inner join (select distinct handle_id from message) m on m.handle_id=h.ROWID;')
-    or fail("Couldn't prepare distinct address SELECT statement: " . $DBI::errstr);
-$stmt->execute() or fail("Couldn't execute distinct address SELECT statement: " . $DBI::errstr);
-
-
 sub lookup_ios_address {
     my $address = shift;
     my $like = "%$address%";
@@ -742,7 +737,8 @@ sub lookup_macos_address {
 
     my @lookuprow = ();
     foreach (keys(%mac_addressbook)) {
-        if ((index($_, $email) != -1) || (index($_, $phone) != -1)) {
+        if ( (($email ne '') && (index($_, $email) != -1)) ||
+             (($phone ne '') && (index($_, $phone) != -1)) ) {
             my $person = $mac_addressbook{$_};
             @lookuprow = @$person;
             last;
@@ -756,10 +752,8 @@ sub lookup_macos_address {
     return @lookuprow;
 }
 
-while (my @row = $stmt->fetchrow_array()) {
-    my ($handleid, $address) = @row;
-    my $proper = undef;
-
+sub lookup_address {
+    my ($handleid, $address) = @_;
     dbgprint("looking for $address...\n");
     my @lookuprow = $ios_archive ? lookup_ios_address($address) : lookup_macos_address($address);
     ($longnames{$handleid}, $shortnames{$handleid}) = parse_addressbook_name($address, @lookuprow);
@@ -767,52 +761,25 @@ while (my @row = $stmt->fetchrow_array()) {
     dbgprint("shortname for $address ($handleid) == " . $shortnames{$handleid} . "\n");
 }
 
-# We use -1 for iPhone owner in the chat.
-fail('Already a handle_id of -1?!') if defined $longnames{-1};
-fail('Already a handle_id of -1?!') if defined $shortnames{-1};
+$stmt = $db->prepare('select m.handle_id, h.id from handle as h inner join (select distinct handle_id from message) m on m.handle_id=h.ROWID;')
+    or fail("Couldn't prepare distinct address SELECT statement: " . $DBI::errstr);
+$stmt->execute() or fail("Couldn't execute distinct address SELECT statement: " . $DBI::errstr);
 
-if ($ios_archive) {
-    # !!! FIXME: is the owner always the first entry in the address book?
-    $lookupstmt = $addressbookdb->prepare('select ROWID, Nickname, First, Middle, Last from ABPerson order by ROWID limit 1;')
-        or fail("Couldn't prepare owner lookup SELECT statement: " . $DBI::errstr);
-    if (not $lookupstmt->execute()) {
-        fail("Couldn't execute owner lookup SELECT statement: " . $DBI::errstr);
-    } else {
-        my @lookuprow = $lookupstmt->fetchrow_array();
-        fail("Couldn't find iPhone owner's address book entry?!") if not @lookuprow;
-        my $rowid = shift @lookuprow;
-        ($longnames{-1}, $shortnames{-1}) = parse_addressbook_name('me', @lookuprow);
-        # Ok, let's get the email address or phone number for this user.
-        $lookupstmt = $addressbookdb->prepare('select value from ABMultiValue where record_id=? and property=? order by UID limit 1;')
-            or fail("Couldn't prepare owner phone/email lookup SELECT statement: " . $DBI::errstr);
-
-        # 4 is email address, 3 is phone number.
-        $lookupstmt->execute($rowid, 4) or fail("Couldn't execute owner phone/email lookup SELECT statement: " . $DBI::errstr);
-        @lookuprow = $lookupstmt->fetchrow_array();
-        if (@lookuprow) {
-            $imessageuser = shift @lookuprow;
-        } else {
-            $lookupstmt->execute($rowid, 3) or fail("Couldn't execute owner phone/email lookup SELECT statement: " . $DBI::errstr);
-            @lookuprow = $lookupstmt->fetchrow_array();
-            fail("Couldn't find email or phone number of iPhone owner.") if not @lookuprow;
-            $imessageuser = shift @lookuprow;
-            $imessageuser =~ s/[^\d]//g;
-            $imessageuser = "phone-$imessageuser\@icloud.com";
-        }
-    }
-} else {  # macOS, not iOS.
-    # !!! FIXME
-    $longnames{-1} = "me";
-    $shortnames{-1} = "me";
-    $imessageuser = "me\@me.com";
+while (my @row = $stmt->fetchrow_array()) {
+    lookup_address(@row);
 }
 
-$imessageuserhost = $imessageuser;
-$imessageuserhost =~ s/\A.*\@//;
+$stmt = $db->prepare('select distinct account from message;')
+    or fail("Couldn't prepare distinct account SELECT statement: " . $DBI::errstr);
+$stmt->execute() or fail("Couldn't execute distinct address SELECT statement: " . $DBI::errstr);
 
-dbgprint("longname for imessageuser ($imessageuser) == " . $longnames{-1} . "\n");
-dbgprint("shortname for imessageuser ($imessageuser) == " . $shortnames{-1} . "\n");
-dbgprint("imessageuserhost == $imessageuserhost\n");
+while (my @row = $stmt->fetchrow_array()) {
+    my $account = shift @row;
+    my $address = $account;
+    $address =~ s/\A[ep]\://i or fail("Unexpected account format '$account'");
+    dbgprint("distinct account: '$account' -> '$address'\n");
+    lookup_address($account, $address);
+}
 
 %mac_addressbook = ();  # dump all this, we're done with it.
 
@@ -835,7 +802,7 @@ my $lastdate = 0;
 my $lastday = '';
 my $lasthandle_id = 0;
 my $alias = undef;
-my $thisimessageuseralias = $shortnames{-1};
+my $thisimessageuseralias = undef;
 my $startmsgid = undef;
 my $newestmsgid = 0;
 
@@ -925,6 +892,26 @@ while (my @row = $stmt->fetchrow_array()) {
     if (($handle_id != $lasthandle_id) or (talk_gap($lastdate, $date))) {
         flush_conversation(0);
 
+        $imessageuser = $account;
+        if ($imessageuser =~ s/\A([ep])\://i) {
+            my $type = lc($1);
+            if ($type eq 'p') {
+                $imessageuser =~ s/[^\d]//g;
+                $imessageuser = "phone-$imessageuser\@icloud.com";
+            }
+        } else {
+            fail("BUG: this shouldn't have happened."); # we checked this before.
+        }
+
+        $imessageuserhost = $imessageuser;
+        $imessageuserhost =~ s/\A.*\@//;
+        $imessageuserlongname = $longnames{$account};
+        $imessageusershortname = $shortnames{$account};
+
+        dbgprint("longname for imessageuser ($imessageuser) == $imessageuserlongname\n");
+        dbgprint("shortname for imessageuser ($imessageuser) == $imessageusershortname\n");
+        dbgprint("imessageuserhost == $imessageuserhost\n");
+
         $outtimestamp = $date;
         $outhandle_id = $handle_id;
         $outid = $msgid;
@@ -934,15 +921,15 @@ while (my @row = $stmt->fetchrow_array()) {
         my $fullalias = $longnames{$handle_id};
         my $shortalias = $shortnames{$handle_id};
 
-        if ($shortalias ne $shortnames{-1}) {
+        if ($shortalias ne $imessageusershortname) {
             $alias = $shortalias;
-            $thisimessageuseralias = $shortnames{-1};
-        } elsif ($fullalias ne $longnames{-1}) {
+            $thisimessageuseralias = $imessageusershortname;
+        } elsif ($fullalias ne $imessageuserlongname) {
             $alias = $fullalias;
-            $thisimessageuseralias = $longnames{-1};
+            $thisimessageuseralias = $imessageuserlongname;
         } else {
             $alias = "$shortalias ($idname)";
-            $thisimessageuseralias = $shortnames{-1} . " ($imessageuser)";
+            $thisimessageuseralias = "$imessageusershortname ($imessageuser)";
         }
 
         $outperson = $idname;
