@@ -213,11 +213,17 @@ sub load_attachment {
 my %longnames = ();
 my %shortnames = ();
 
+# !!! FIXME: this should probably go in a hash or something.
 my $outperson = undef;
 my $outmsgid = undef;
 my $outhandle_id = undef;
 my $outid = undef;
 my $outtimestamp = undef;
+my $outhasfromme = 0;
+my $outhasfromthem = 0;
+my $outhasfromme_a = 0;
+my $outhasfromme_sms = 0;
+my $outhasfromme_sms_a = 0;
 my $output_text = '';
 my $output_html = '';
 my @output_attachments = ();
@@ -313,7 +319,6 @@ body {
   font-size: 20px;
   font-weight: normal;
 }
-
 section {
   max-width: 450px;
   margin: 50px auto;
@@ -324,11 +329,15 @@ section div {
   margin-bottom: 10px;
   line-height: 24px;
 }
-
 .clear {
   clear: both;
 }
+EOF
+;
 
+        # Don't output parts of the CSS we don't need to save a little space.
+        if ($outhasfromme) {
+            print TMPEMAIL <<EOF
 .from-me {
   position: relative;
   padding: 10px 20px;
@@ -336,10 +345,6 @@ section div {
   background: #0B93F6;
   border-radius: 25px;
   float: right;
-}
-.from-me a {
-  color: white;
-  background: #0B93F6;
 }
 .from-me:before {
   content: "";
@@ -364,16 +369,44 @@ section div {
   border-bottom-left-radius: 10px;
   transform: translate(-30px, -2px);
 }
+EOF
+;
+        }
+
+        if ($outhasfromme_a) {
+            print TMPEMAIL <<EOF
+.from-me a {
+  color: white;
+  background: #0B93F6;
+}
+EOF
+;
+        }
+
+        if ($outhasfromme_sms) {
+            print TMPEMAIL <<EOF
 .sms {
   background: #04D74A;
 }
 .sms:before {
   border-right: 20px solid #04D74A;
 }
+EOF
+;
+        }
+
+        if ($outhasfromme_sms_a) {
+            print TMPEMAIL <<EOF
 .sms a {
   color: white;
   background: #04D74A;
 }
+EOF
+;
+        }
+
+        if ($outhasfromthem) {
+            print TMPEMAIL <<EOF
 .from-them {
   position: relative;
   padding: 10px 20px;
@@ -405,6 +438,11 @@ section div {
   border-bottom-right-radius: 10px;
   transform: translate(-30px, -2px);
 }
+EOF
+;
+        }
+
+        print TMPEMAIL <<EOF
 </style></head><body><section>
 $output_html</section></body></html>
 
@@ -916,6 +954,12 @@ while (my @row = $stmt->fetchrow_array()) {
         $lastdate = 0;
         $lastday = '';
 
+        $outhasfromme = 0;
+        $outhasfromthem = 0;
+        $outhasfromme_a = 0;
+        $outhasfromme_sms = 0;
+        $outhasfromme_sms_a = 0;
+
         $output_text = '';
         $output_html = '';
         @output_attachments = ();
@@ -934,6 +978,8 @@ while (my @row = $stmt->fetchrow_array()) {
             $output_html = "<p><i>$subject</i></p>\n\n";
         }
     }
+
+    my $is_sms = (defined $service) && ($service eq 'SMS');
 
     # UTF-8 for non-breaking space (&nbsp;). Dump it at end of line; iMessage seems to add it occasionally (maybe double-space to add a period then hit Send?).
     $text =~ s/\xC2\xA0\Z//;
@@ -954,7 +1000,25 @@ while (my @row = $stmt->fetchrow_array()) {
         $htmltext = "<b>$htmltext</b>";
     }
 
-    $htmltext =~ s/($RE{URI})/<a href="$1">$1<\/a>/g;
+    if ($is_from_me) {
+        if ($is_sms) {
+            $outhasfromme_sms = 1;
+        } else {
+            $outhasfromme = 1;
+        }
+    } else {
+        $outhasfromthem = 1;
+    }
+
+    if ($htmltext =~ s/($RE{URI})/<a href="$1">$1<\/a>/g) {
+        if ($is_from_me) {
+            if ($is_sms) {
+                $outhasfromme_sms_a = 1;
+            } else {
+                $outhasfromme_a = 1;
+            }
+        }
+    }
 
     if ($cache_has_attachments) {
         $attachmentstmt->execute($msgid) or fail("Couldn't execute attachment lookup SELECT statement: " . $DBI::errstr);
@@ -1032,7 +1096,7 @@ while (my @row = $stmt->fetchrow_array()) {
     if ($allow_html) {
         my $htmlfromclass;
         if ($is_from_me) {
-            $htmlfromclass = ($service ne 'SMS') ? 'from-me' : 'from-me sms';
+            $htmlfromclass = $is_sms ? 'from-me sms' : 'from-me';
         } else {
             $htmlfromclass = 'from-them';
         }
