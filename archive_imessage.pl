@@ -190,7 +190,7 @@ sub slurp_archived_file {
 
 sub get_image_orientation {
     my $fname = shift;
-    my $cmdline = "$program_dir/exiftool/exiftool -n -Orientation '$fname'";
+    my $cmdline = "$program_dir/exiftool/exiftool -n -Orientation '$fname' 2>/dev/null";
     my $orientation = `$cmdline`;
     fail("exiftool failed ('$cmdline')") if ($? != 0);
     chomp($orientation);
