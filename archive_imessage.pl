@@ -197,12 +197,14 @@ sub load_attachment {
     my $is_image = $mimetype =~ /\Aimage\//;
     my $is_video = $mimetype =~ /\Avideo\//;
     if ((defined $attachment_shrink_percent) && ($is_image || $is_video)) {
-        my $fmt = ($mimetype eq 'image/jpeg') ? '-f mjpeg' : '';
+        my $is_jpeg = $mimetype eq 'image/jpeg';
+        my $fmt = $is_jpeg ? '-f mjpeg' : '';
+        my $transpose = $is_jpeg ? 'transpose=1,' : '';
         my $fract = $attachment_shrink_percent / 100.0;
         my $basefname = $origfname;
         $basefname =~ s#.*/##;
         my $outfname = "$maildir/tmp/imessage-chatlog-tmp-$$-attachment-shrink-$basefname";
-        my $cmdline = "ffmpeg $fmt -i '$hashedfname' -vf \"scale='trunc(iw*$fract)+mod(trunc(iw*$fract),2)':'trunc(ih*$fract)+mod(trunc(ih*$fract),2)'\" '$outfname' 2>/dev/null";
+        my $cmdline = "ffmpeg $fmt $transpose -i '$hashedfname' -vf \"${transpose}scale='trunc(iw*$fract)+mod(trunc(iw*$fract),2)':'trunc(ih*$fract)+mod(trunc(ih*$fract),2)'\" '$outfname' 2>/dev/null";
         dbgprint("shrinking attachment: $cmdline\n");
         die("ffmpeg failed ('$cmdline')") if (system($cmdline) != 0);
         read_file($outfname, buf_ref => $fdataref, binmode => ':raw', err_mode => 'carp');
@@ -1055,8 +1057,9 @@ while (my @row = $stmt->fetchrow_array()) {
                     } else {
                         $fnameimg =~ s#.*/##;
                         my $outfname = "$maildir/tmp/imessage-chatlog-tmp-$$-$msgid-$fnameimg.jpg";
-                        my $fmt = ($mimetype eq 'image/jpeg') ? '-f mjpeg' : '';
-                        my $transpose = $is_image ? 'transpose=1,' : '';
+                        my $is_jpeg = $mimetype eq 'image/jpeg';
+                        my $fmt = $is_jpeg ? '-f mjpeg' : '';
+                        my $transpose = $is_jpeg ? 'transpose=1,' : '';
                         my $cmdline = "ffmpeg $fmt -i '$hashedfname' -frames 1 -vf '${transpose}scale=235:-1' '$outfname' 2>/dev/null";
                         dbgprint("generating thumbnail: $cmdline\n");
                         die("ffmpeg failed ('$cmdline')") if (system($cmdline) != 0);
