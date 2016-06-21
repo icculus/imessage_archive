@@ -217,8 +217,8 @@ my $outmsgid = undef;
 my $outhandle_id = undef;
 my $outid = undef;
 my $outtimestamp = undef;
-my $output_text = undef;
-my $output_html = undef;
+my $output_text = '';
+my $output_html = '';
 my @output_attachments = ();
 
 sub flush_conversation {
@@ -229,8 +229,8 @@ sub flush_conversation {
     dbgprint("Flushing conversation! trash=$trash\n");
 
     if ($trash) {
-        $output_text = undef;
-        $output_html = undef;
+        $output_text = '';
+        $output_html = '';
         @output_attachments = ();
         return;
     }
@@ -475,8 +475,8 @@ EOF
 
     close(TMPEMAIL);
 
-    $output_text = undef;
-    $output_html = undef;
+    $output_text = '';
+    $output_html = '';
     @output_attachments = ();
 
     my $size = (stat($tmpemail))[7];
