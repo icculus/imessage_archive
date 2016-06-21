@@ -1067,6 +1067,8 @@ while (my @row = $stmt->fetchrow_array()) {
             $shortfname =~ s/\A.*\///;
             $plaintext =~ s/\xEF\xBF\xBC/\n[attachment $shortfname]\n/;
 
+            dbgprint("ATTACHMENT! fname=$fname shortfname=$shortfname mime=$mimetype\n");
+
             if ($allow_html) {
                 if ($allow_thumbnails && ($is_image || $is_video)) {
                     my $fnameimg = $fname;
@@ -1085,15 +1087,37 @@ while (my @row = $stmt->fetchrow_array()) {
                     } else {
                         $fnameimg =~ s#.*/##;
                         my $orientation = get_image_orientation($hashedfname);
-                        my $is_jpeg = $mimetype eq 'image/jpeg';
-                        my $is_gif = $mimetype eq 'image/gif';
-                        my $ext = $is_gif ? '.gif' : '.jpg';   # force everything to a .jpg thumbnail, except .gifs, since they are well-supported and might be animated.  # !!! FIXME: make videos into .gifs with a few frames?
-                        my $frames = $is_gif ? '' : '-frames 1';   # Force to one frame, so movies just get a static image, but let animated gifs alone.
-                        my $outfname = "$maildir/tmp/imessage-chatlog-tmp-$$-$msgid-$fnameimg.$ext";
-                        my $fmt = $is_jpeg ? '-f mjpeg' : '';
-                        my $cmdline = "$program_dir/ffmpeg $fmt -i '$hashedfname' $frames -vf 'scale=235:-1' '$outfname' 2>/dev/null";
+
+                        my $outfname = "$maildir/tmp/imessage-chatlog-tmp-$$-$msgid-$fnameimg";
+                        my $palettefname = undef;
+                        my $cmdline;
+                        if ($is_video) {
+                            $outfname .= '.gif';
+                            $palettefname = "$maildir/tmp/imessage-chatlog-tmp-$$-$msgid-palette-$fnameimg.png";
+                            $cmdline = "$program_dir/ffmpeg -y -i '$hashedfname' -vf 'fps=3,scale=235:-1:flags=lanczos,palettegen' '$palettefname' 2>/dev/null";
+                            dbgprint("Generating optimal palette for video->gif ($cmdline)...\n");
+                            unlink($palettefname), die("ffmpeg failed ('$cmdline')") if (system($cmdline) != 0);
+                            $cmdline = "$program_dir/ffmpeg -i '$hashedfname' -i '$palettefname' -filter_complex 'fps=3,scale=235:-1:flags=lanczos[x];[x][1:v]paletteuse' '$outfname' 2>/dev/null";
+                            $mimetype = 'image/gif';
+                        } else {
+                            my $is_jpeg = $mimetype eq 'image/jpeg';
+                            my $is_gif = $mimetype eq 'image/gif';
+                            my $ext = $is_gif ? '.gif' : '.jpg';   # force everything to a .jpg thumbnail, except .gifs, since they are well-supported and might be animated.
+                            $mimetype = $is_gif ? 'image/gif' : 'image/jpeg';
+                            my $frames = $is_gif ? '' : '-frames 1';   # Force to one frame, so movies just get a static image, but let animated gifs alone.
+                            my $fmt = $is_jpeg ? '-f mjpeg' : '';
+                            $outfname .= $ext;
+                            $cmdline = "$program_dir/ffmpeg $fmt -i '$hashedfname' $frames -vf 'scale=235:-1' '$outfname' 2>/dev/null";
+                        }
+
                         dbgprint("generating thumbnail: $cmdline\n");
-                        die("ffmpeg failed ('$cmdline')") if (system($cmdline) != 0);
+                        if (system($cmdline) != 0) {
+                            unlink($palettefname) if defined $palettefname;
+                            unlink($outfname);
+                            die("ffmpeg failed ('$cmdline')");
+                        }
+                        unlink($palettefname) if defined $palettefname;
+
                         set_image_orientation($outfname, $orientation, 1);
                         my $fdata = undef;
                         if ((not defined read_file($outfname, buf_ref => \$fdata, binmode => ':raw', err_mode => 'carp')) or (not defined $fdata)) {
@@ -1112,8 +1136,6 @@ while (my @row = $stmt->fetchrow_array()) {
                     $htmltext =~ s#\xEF\xBF\xBC#[attachment $shortfname]<br/>\n#;
                 }
             }
-
-            dbgprint("ATTACHMENT! fname=$fname shortfname=$shortfname mime=$mimetype\n");
         }
     }
 
