@@ -806,6 +806,7 @@ while (my @row = $stmt->fetchrow_array()) {
     next if not defined $account;
     my $address = $account;
     $address =~ s/\A[ep]\://i or fail("Unexpected account format '$account'");
+    next if $address eq '';
     dbgprint("distinct account: '$account' -> '$address'\n");
     lookup_address($account, $address);
     $default_account = $account if not defined $default_account;  # oh well.
@@ -930,6 +931,7 @@ while (my @row = $stmt->fetchrow_array()) {
         flush_conversation(0);
 
         $account = $default_account if (not defined $account); # happens on old SMS messages.
+        $account = $default_account if $account =~ /\A[ep]\:\Z/i;
 
         $imessageuser = $account;
         if ($imessageuser =~ s/\A([ep])\://i) {
