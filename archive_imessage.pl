@@ -3,6 +3,7 @@
 use warnings;
 use strict;
 
+use File::Basename;
 use Digest::SHA1 qw(sha1_hex);
 use DBI;
 use Encode qw( decode_utf8 );
@@ -18,6 +19,8 @@ my $gaptime = (30 * 60);
 my $timezone = strftime('%Z', localtime());
 my $now = time();
 my $homedir = $ENV{'HOME'};
+my $program_dir = dirname($0);
+
 
 # Fixes unicode dumping to stdio...hopefully you have a utf-8 terminal by now.
 #binmode(STDOUT, ":utf8");
@@ -68,9 +71,6 @@ sub usage {
     print STDERR "    --gap-time=NUM: treat NUM minutes of silence as the end of a conversation.\n";
     print STDERR "    backupdir: Directory holding unencrypted iPhone backup.\n";
     print STDERR "    maildir: Path of Maildir where we write archives and metadata.\n";
-    print STDERR "\n";
-    print STDERR "This program needs ffmpeg in your \$PATH for various tasks.\n";
-    print STDERR " Thumbnails in HTML output, and shrinking attachments both need it.\n";
     print STDERR "\n";
     exit(1);
 }
@@ -188,6 +188,30 @@ sub slurp_archived_file {
     return 1;
 }
 
+sub get_image_orientation {
+    my $fname = shift;
+    my $cmdline = "$program_dir/exiftool/exiftool -n -Orientation '$fname'";
+    my $orientation = `$cmdline` or fail("exiftool failed ('$cmdline')");
+    chomp($orientation);
+    $orientation =~ s/\AOrientation\s*\:\s*(\d*)\s*\Z/$1/;
+    dbgprint("File '$fname' has an Orientation of '$orientation'.\n");
+    return ($orientation eq '') ? undef : int($orientation);
+}
+
+sub set_image_orientation {
+    my $fname = shift;
+    my $orientation = shift;
+    my $trash = shift;
+    if (defined $orientation) {
+        my $cmdline = "$program_dir/exiftool/exiftool -n -Orientation=$orientation '$fname'";
+        dbgprint("marking image orientation: $cmdline\n");
+        if (system($cmdline) != 0) {
+            unlink($fname) if $trash;
+            fail("exiftool failed ('$cmdline')")
+        }
+    }
+}
+
 sub load_attachment {
     my $origfname = shift;
     my $hashedfname = shift;
@@ -199,14 +223,15 @@ sub load_attachment {
     if ((defined $attachment_shrink_percent) && ($is_image || $is_video)) {
         my $is_jpeg = $mimetype eq 'image/jpeg';
         my $fmt = $is_jpeg ? '-f mjpeg' : '';
-        my $transpose = $is_jpeg ? 'transpose=1,' : '';
+        my $orientation = get_image_orientation($hashedfname);
         my $fract = $attachment_shrink_percent / 100.0;
         my $basefname = $origfname;
         $basefname =~ s#.*/##;
         my $outfname = "$maildir/tmp/imessage-chatlog-tmp-$$-attachment-shrink-$basefname";
-        my $cmdline = "ffmpeg $fmt $transpose -i '$hashedfname' -vf \"${transpose}scale='trunc(iw*$fract)+mod(trunc(iw*$fract),2)':'trunc(ih*$fract)+mod(trunc(ih*$fract),2)'\" '$outfname' 2>/dev/null";
+        my $cmdline = "$program_dir/ffmpeg $fmt -i '$hashedfname' -vf \"scale='trunc(iw*$fract)+mod(trunc(iw*$fract),2)':'trunc(ih*$fract)+mod(trunc(ih*$fract),2)'\" '$outfname' 2>/dev/null";
         dbgprint("shrinking attachment: $cmdline\n");
         die("ffmpeg failed ('$cmdline')") if (system($cmdline) != 0);
+        set_image_orientation($outfname, $orientation, 1);
         read_file($outfname, buf_ref => $fdataref, binmode => ':raw', err_mode => 'carp');
         unlink($outfname);
     } else {
@@ -1056,13 +1081,14 @@ while (my @row = $stmt->fetchrow_array()) {
                         $htmltext =~ s#\xEF\xBF\xBC#[Missing image '$fnameimg']<br/>\n#;
                     } else {
                         $fnameimg =~ s#.*/##;
+                        my $orientation = get_image_orientation($hashedfname);
                         my $outfname = "$maildir/tmp/imessage-chatlog-tmp-$$-$msgid-$fnameimg.jpg";
                         my $is_jpeg = $mimetype eq 'image/jpeg';
                         my $fmt = $is_jpeg ? '-f mjpeg' : '';
-                        my $transpose = $is_jpeg ? 'transpose=1,' : '';
-                        my $cmdline = "ffmpeg $fmt -i '$hashedfname' -frames 1 -vf '${transpose}scale=235:-1' '$outfname' 2>/dev/null";
+                        my $cmdline = "$program_dir/ffmpeg $fmt -i '$hashedfname' -frames 1 -vf 'scale=235:-1' '$outfname' 2>/dev/null";
                         dbgprint("generating thumbnail: $cmdline\n");
                         die("ffmpeg failed ('$cmdline')") if (system($cmdline) != 0);
+                        set_image_orientation($outfname, $orientation, 1);
                         my $fdata = undef;
                         if ((not defined read_file($outfname, buf_ref => \$fdata, binmode => ':raw', err_mode => 'carp')) or (not defined $fdata)) {
                             unlink($outfname);
