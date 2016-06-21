@@ -807,7 +807,8 @@ if ($report_progress) {
     $totalrows = $row[0];
 }
 
-$stmt = $db->prepare('select h.id, m.ROWID, m.text, m.service, m.account, m.handle_id, m.subject, m.date, m.is_emote, m.is_from_me, m.was_downgraded, m.is_audio_message, m.cache_has_attachments from message as m inner join handle as h on m.handle_id=h.ROWID where (m.ROWID > ?) order by m.handle_id, m.ROWID;')
+# We filter to iMessage and SMS, in case some other iChat service landed in here too.
+$stmt = $db->prepare("select h.id, m.ROWID, m.text, m.service, m.account, m.handle_id, m.subject, m.date, m.is_emote, m.is_from_me, m.was_downgraded, m.is_audio_message, m.cache_has_attachments from message as m inner join handle as h on m.handle_id=h.ROWID where (m.ROWID > ?) and (m.service='iMessage' or m.service='SMS') order by m.handle_id, m.ROWID;")
     or fail("Couldn't prepare message SELECT statement: " . $DBI::errstr);
 
 my $attachmentstmt = $db->prepare('select filename, mime_type from attachment as a inner join (select rowid,attachment_id from message_attachment_join where message_id=?) as j where a.ROWID=j.attachment_id order by j.ROWID;')
