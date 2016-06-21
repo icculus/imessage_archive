@@ -63,6 +63,7 @@ sub usage {
     print STDERR "    --no-video-attachments: Don't include image/video attachments.\n";
     print STDERR "    --no-attachments: Don't include attachments at all.\n";
     print STDERR "    --no-thumbnails: Don't include thumbnails in HTML output.\n";
+    print STDERR "    --gap-time=NUM: treat NUM minutes of silence as the end of a conversation.\n";
     print STDERR "    backupdir: Directory holding unencrypted iPhone backup.\n";
     print STDERR "    maildir: Path of Maildir where we write archives and metadata.\n";
     print STDERR "\n";
@@ -86,7 +87,7 @@ foreach (@ARGV) {
     $allow_thumbnails = 1, next if $_ eq '--thumbnails';
     $allow_thumbnails = 0, next if $_ eq '--no-thumbnails';
     $attachment_shrink_percent = int($1), next if /\A--attachments-shrink-percent=(\d+)\Z/;
-    $report_progress = 0, next if $_ eq '--no-progress';
+    $gaptime = int($1) * 60, next if /\A--gap-time=(\d+)\Z/;
     $archivedir = $_, next if not defined $archivedir;
     $maildir = $_, next if (not defined $maildir);
     usage();
