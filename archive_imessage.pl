@@ -16,6 +16,7 @@ my $VERSION = '0.0.1';
 my $gaptime = (30 * 60);
 my $timezone = strftime('%Z', localtime());
 my $now = time();
+my $homedir = $ENV{'HOME'};
 
 # Fixes unicode dumping to stdio...hopefully you have a utf-8 terminal by now.
 #binmode(STDOUT, ":utf8");
@@ -49,6 +50,7 @@ my $attachment_shrink_percent = undef;
 my $allow_video_attachments = 1;
 my $allow_attachments = 1;
 my $allow_thumbnails = 1;
+my $ios_archive = 0;
 
 sub usage {
     print STDERR "USAGE: $0 [...options...] <backupdir> <maildir>\n";
@@ -100,12 +102,31 @@ if ((defined $attachment_shrink_percent) && ($attachment_shrink_percent == 100))
 sub archive_fname {
     my $domain = shift;
     my $name = shift;
-    my $combined = "$domain-$name";
-    my $hashed = sha1_hex($combined);
-    dbgprint("Hashed archived filename '$combined' to '$hashed'\n");
-    return "$archivedir/$hashed";
+    if ($ios_archive) {
+        my $combined = "$domain-$name";
+        my $hashed = sha1_hex($combined);
+        dbgprint("Hashed archived filename '$combined' to '$hashed'\n");
+        return "$archivedir/$hashed";
+    }
+
+    return "$archivedir/$name";
 }
 
+
+fail("ERROR: Directory '$archivedir' doesn't exist.") if (not -d $archivedir);
+if (-f "$archivedir/Manifest.mbdb") {
+    $ios_archive = 1;
+} elsif (-f "$archivedir/chat.db") {
+    $ios_archive = 0;
+} else {
+    fail("ERROR: '$archivedir' isn't a macOS Messages directory or an iOS backup.\n");
+}
+
+if ($ios_archive) {
+    dbgprint("Chat database is in an iOS backup.\n");
+} else {
+    dbgprint("Chat database is in a macOS install.\n");
+}
 
 my $startid = 0;
 my %startids = ();
@@ -147,7 +168,11 @@ sub slurp_archived_file {
     my $hashedfname = archive_fname($domain, $fname);
 
     if (not -f $hashedfname) {
-        print STDERR "WARNING: Missing attachment '$hashedfname' ('$domain', '$fname')\n";
+        if ($ios_archive) {
+            print STDERR "WARNING: Missing attachment '$hashedfname' ('$domain', '$fname')\n";
+        } else {
+            print STDERR "WARNING: Missing attachment '$hashedfname'\n";
+        }
         $$fdataref = '[MISSING]';
         return 0;
     }
@@ -174,8 +199,8 @@ sub load_attachment {
         $basefname =~ s#.*/##;
         my $outfname = "$maildir/tmp/imessage-chatlog-tmp-$$-attachment-shrink-$basefname";
         my $cmdline = "ffmpeg $fmt -i '$hashedfname' -vf \"scale='trunc(iw*$fract)+mod(trunc(iw*$fract),2)':'trunc(ih*$fract)+mod(trunc(ih*$fract),2)'\" '$outfname' 2>/dev/null";
-        print("shrinking attachment: $cmdline\n");
-        die('ffmpeg failed') if (system($cmdline) != 0);
+        dbgprint("shrinking attachment: $cmdline\n");
+        die("ffmpeg failed ('$cmdline')") if (system($cmdline) != 0);
         read_file($outfname, buf_ref => $fdataref, binmode => ':raw', err_mode => 'carp');
         unlink($outfname);
     } else {
@@ -386,16 +411,25 @@ EOF
             my $mimetype = shift @output_attachments;
             my $domain = 'MediaDomain';
 
-            $fname =~ s#\A\~/##;
-            $fname =~ s#\A/var/mobile/##;
+            $fname =~ s#\A\~/#$homedir/# if (not $ios_archive);
+            $fname =~ s#\A\~/## if ($ios_archive);
+            $fname =~ s#\A/var/mobile/## if ($ios_archive);
             my $hashedfname = archive_fname($domain, $fname);
 
             my $fdata = undef;
             if (not -f $hashedfname) {
-                print STDERR "WARNING: Missing attachment '$hashedfname' ('$domain', '$fname')\n";
+                if ($ios_archive) {
+                    print STDERR "WARNING: Missing attachment '$hashedfname' ('$domain', '$fname')\n";
+                } else {
+                    print STDERR "WARNING: Missing attachment '$hashedfname'\n";
+                }
             } else {
                 load_attachment($fname, $hashedfname, \$fdata, $mimetype);
-                print STDERR "WARNING: Failed to load '$hashedfname' ('$domain', '$fname')\n" if (not defined $fdata);
+                if ($ios_archive) {
+                    print STDERR "WARNING: Failed to load '$hashedfname' ('$domain', '$fname')\n" if (not defined $fdata);
+                } else {
+                    print STDERR "WARNING: Failed to load '$hashedfname'\n" if (not defined $fdata);
+                }
             }
 
             $fname =~ s#\A.*/##;
@@ -503,20 +537,14 @@ if (open(LASTID,'<',$lastarchivefname)) {
     close(LASTID);
 }
 
-my $dbname = archive_fname('HomeDomain', 'Library/SMS/sms.db');
+my $stmt;
+
+my $dbname = archive_fname('HomeDomain', $ios_archive ? 'Library/SMS/sms.db' : 'chat.db');
 dbgprint("message database is '$dbname'\n");
 my $db = DBI->connect("DBI:SQLite:dbname=$dbname", '', '', { RaiseError => 0 })
     or fail("Couldn't open message database at '$archivedir/$dbname': " . $DBI::errstr);
 
-my $addressbookdbname = archive_fname('HomeDomain', 'Library/AddressBook/AddressBook.sqlitedb');
-dbgprint("address book database is '$addressbookdbname'\n");
-my $addressbookdb = DBI->connect("DBI:SQLite:dbname=$addressbookdbname", '', '', { RaiseError => 0 })
-    or fail("Couldn't open addressbook database at '$archivedir/$addressbookdbname': " . $DBI::errstr);
-
-my $stmt;
-
 dbgprint("Sorting out real names...\n");
-
 sub parse_addressbook_name {
     my @lookuprow = @_;
     my $address = shift @lookuprow;
@@ -559,19 +587,28 @@ sub parse_addressbook_name {
     return ($longname, $shortname);
 }
 
-my $lookupstmt = $addressbookdb->prepare('select c15Phone, c16Email, c11Nickname, c0First, c2Middle, c1Last from ABPersonFullTextSearch_content where ((c15Phone LIKE ?) or (c16Email LIKE ?)) limit 1;')
-    or fail("Couldn't prepare name lookup SELECT statement: " . $DBI::errstr);
+my $addressbookdbname = undef;  # only used on iOS archives right now.
+my $addressbookdb = undef;  # only used on iOS archives right now.
+my $lookupstmt = undef;  # only used on iOS archives right now.
+
+if ($ios_archive) {
+    $addressbookdbname = archive_fname('HomeDomain', 'Library/AddressBook/AddressBook.sqlitedb');
+    dbgprint("address book database is '$addressbookdbname'\n");
+    $addressbookdb = DBI->connect("DBI:SQLite:dbname=$addressbookdbname", '', '', { RaiseError => 0 })
+        or fail("Couldn't open addressbook database at '$archivedir/$addressbookdbname': " . $DBI::errstr);
+
+    $lookupstmt = $addressbookdb->prepare('select c15Phone, c16Email, c11Nickname, c0First, c2Middle, c1Last from ABPersonFullTextSearch_content where ((c15Phone LIKE ?) or (c16Email LIKE ?)) limit 1;')
+        or fail("Couldn't prepare name lookup SELECT statement: " . $DBI::errstr);
+}
 
 $stmt = $db->prepare('select m.handle_id, h.id from handle as h inner join (select distinct handle_id from message) m on m.handle_id=h.ROWID;')
     or fail("Couldn't prepare distinct address SELECT statement: " . $DBI::errstr);
 $stmt->execute() or fail("Couldn't execute distinct address SELECT statement: " . $DBI::errstr);
 
-while (my @row = $stmt->fetchrow_array()) {
-    my ($handleid, $address) = @row;
-    my $proper = undef;
 
+sub lookup_ios_address {
+    my $address = shift;
     my $like = "%$address%";
-    dbgprint("looking for $address...\n");
 
     $lookupstmt->execute($like, $like) or fail("Couldn't execute name lookup SELECT statement: " . $DBI::errstr);
 
@@ -584,7 +621,97 @@ while (my @row = $stmt->fetchrow_array()) {
     } else {
         @lookuprow = (undef, undef, undef, undef);
     }
+    return @lookuprow;
+}
 
+
+my %mac_addressbook = ();
+if (not $ios_archive) {
+    %mac_addressbook = ();
+    open(HELPERIO, '-|', "./dump_mac_addressbook") or die("Can't run ./dump_mac_addressbook: $!\n");
+
+    my @lines = ();
+    while (<HELPERIO>) {
+        chomp;
+        dbgprint("dump_mac_addressbook line: '$_'\n");
+        push @lines, $_;
+    }
+    close(HELPERIO);
+
+    my @person = ();
+    while (@lines) {
+        for (my $i = 0; $i < 4; $i++ ) {
+            my $x = shift @lines;
+            last if not defined $x;
+            push @person, $x eq '' ? undef : $x;
+        }
+
+        if (scalar(@person) != 4) {
+            dbgprint("incomplete record from dump_mac_addressbook!\n");
+            last;
+        } elsif ($debug) {
+            my ($a, $b, $c, $d) = @person;
+            $a = '' if not defined $a;
+            $b = '' if not defined $b;
+            $c = '' if not defined $c;
+            $d = '' if not defined $d;
+            dbgprint("Person from dump_mac_addressbook: [$a] [$b] [$c] [$d]\n");
+        }
+
+        # Phone numbers...flatten them down.
+        while (@lines) {
+            my $x = shift @lines;
+            last if (not defined $x) || ($x eq '');
+            $x =~ s/[^0-9]//g;  # flatten.
+            $mac_addressbook{$x} = [ @person ];
+            dbgprint("Person phone: [$x]\n");
+        }
+
+        # Emails...lowercase them.
+        while (@lines) {
+            my $x = shift @lines;
+            last if (not defined $x) || ($x eq '');
+            $mac_addressbook{lc($x)} = [ @person ];
+            dbgprint("Person email: [$x]\n");
+        }
+
+        @person = ();
+    }
+
+    dbgprint("Done pulling in Mac address book.\n");
+}
+
+sub lookup_macos_address {
+    my $address = shift;
+
+    # !!! FIXME: this all sucks.
+    my $phone = $address;
+    $phone =~ s/\A\+1//;
+    $phone =~ s/[^0-9]//g;  # flatten.
+    my $email = lc($address);
+
+    my @lookuprow = ();
+    foreach (keys(%mac_addressbook)) {
+        if ((index($_, $email) != -1) || (index($_, $phone) != -1)) {
+            my $person = $mac_addressbook{$_};
+            @lookuprow = @$person;
+            last;
+        }
+    }
+
+    while (scalar(@lookuprow) < 4) {
+        push @lookuprow, undef;
+    }
+
+    return @lookuprow;
+}
+
+while (my @row = $stmt->fetchrow_array()) {
+    my ($handleid, $address) = @row;
+    my $proper = undef;
+
+    dbgprint("looking for $address...\n");
+    my @lookuprow = $ios_archive ? lookup_ios_address($address) : lookup_macos_address($address);
     ($longnames{$handleid}, $shortnames{$handleid}) = parse_addressbook_name($address, @lookuprow);
     dbgprint("longname for $address ($handleid) == " . $longnames{$handleid} . "\n");
     dbgprint("shortname for $address ($handleid) == " . $shortnames{$handleid} . "\n");
@@ -594,33 +721,40 @@ while (my @row = $stmt->fetchrow_array()) {
 fail('Already a handle_id of -1?!') if defined $longnames{-1};
 fail('Already a handle_id of -1?!') if defined $shortnames{-1};
 
-# !!! FIXME: is the owner always the first entry in the address book?
-$lookupstmt = $addressbookdb->prepare('select ROWID, Nickname, First, Middle, Last from ABPerson order by ROWID limit 1;')
-    or fail("Couldn't prepare owner lookup SELECT statement: " . $DBI::errstr);
-if (not $lookupstmt->execute()) {
-    fail("Couldn't execute owner lookup SELECT statement: " . $DBI::errstr);
-} else {
-    my @lookuprow = $lookupstmt->fetchrow_array();
-    fail("Couldn't find iPhone owner's address book entry?!") if not @lookuprow;
-    my $rowid = shift @lookuprow;
-    ($longnames{-1}, $shortnames{-1}) = parse_addressbook_name('me', @lookuprow);
-    # Ok, let's get the email address or phone number for this user.
-    $lookupstmt = $addressbookdb->prepare('select value from ABMultiValue where record_id=? and property=? order by UID limit 1;')
-        or fail("Couldn't prepare owner phone/email lookup SELECT statement: " . $DBI::errstr);
-
-    # 4 is email address, 3 is phone number.
-    $lookupstmt->execute($rowid, 4) or fail("Couldn't execute owner phone/email lookup SELECT statement: " . $DBI::errstr);
-    @lookuprow = $lookupstmt->fetchrow_array();
-    if (@lookuprow) {
-        $imessageuser = shift @lookuprow;
+if ($ios_archive) {
+    # !!! FIXME: is the owner always the first entry in the address book?
+    $lookupstmt = $addressbookdb->prepare('select ROWID, Nickname, First, Middle, Last from ABPerson order by ROWID limit 1;')
+        or fail("Couldn't prepare owner lookup SELECT statement: " . $DBI::errstr);
+    if (not $lookupstmt->execute()) {
+        fail("Couldn't execute owner lookup SELECT statement: " . $DBI::errstr);
     } else {
-        $lookupstmt->execute($rowid, 3) or fail("Couldn't execute owner phone/email lookup SELECT statement: " . $DBI::errstr);
+        my @lookuprow = $lookupstmt->fetchrow_array();
+        fail("Couldn't find iPhone owner's address book entry?!") if not @lookuprow;
+        my $rowid = shift @lookuprow;
+        ($longnames{-1}, $shortnames{-1}) = parse_addressbook_name('me', @lookuprow);
+        # Ok, let's get the email address or phone number for this user.
+        $lookupstmt = $addressbookdb->prepare('select value from ABMultiValue where record_id=? and property=? order by UID limit 1;')
+            or fail("Couldn't prepare owner phone/email lookup SELECT statement: " . $DBI::errstr);
+
+        # 4 is email address, 3 is phone number.
+        $lookupstmt->execute($rowid, 4) or fail("Couldn't execute owner phone/email lookup SELECT statement: " . $DBI::errstr);
         @lookuprow = $lookupstmt->fetchrow_array();
-        fail("Couldn't find email or phone number of iPhone owner.") if not @lookuprow;
-        $imessageuser = shift @lookuprow;
-        $imessageuser =~ s/[^\d]//g;
-        $imessageuser = "phone-$imessageuser\@icloud.com";
+        if (@lookuprow) {
+            $imessageuser = shift @lookuprow;
+        } else {
+            $lookupstmt->execute($rowid, 3) or fail("Couldn't execute owner phone/email lookup SELECT statement: " . $DBI::errstr);
+            @lookuprow = $lookupstmt->fetchrow_array();
+            fail("Couldn't find email or phone number of iPhone owner.") if not @lookuprow;
+            $imessageuser = shift @lookuprow;
+            $imessageuser =~ s/[^\d]//g;
+            $imessageuser = "phone-$imessageuser\@icloud.com";
+        }
     }
+} else {  # macOS, not iOS.
+    # !!! FIXME
+    $longnames{-1} = "me";
+    $shortnames{-1} = "me";
+    $imessageuser = "me\@me.com";
 }
 
 $imessageuserhost = $imessageuser;
@@ -630,8 +764,10 @@ dbgprint("longname for imessageuser ($imessageuser) == " . $longnames{-1} . "\n"
 dbgprint("shortname for imessageuser ($imessageuser) == " . $shortnames{-1} . "\n");
 dbgprint("imessageuserhost == $imessageuserhost\n");
 
+%mac_addressbook = ();  # dump all this, we're done with it.
+
 $lookupstmt = undef;
-$addressbookdb->disconnect();
+$addressbookdb->disconnect() if (defined $addressbookdb);
 $addressbookdb = undef;
 
 
@@ -826,26 +962,38 @@ while (my @row = $stmt->fetchrow_array()) {
             if ($allow_html) {
                 if ($allow_thumbnails && ($is_image || $is_video)) {
                     my $fnameimg = $fname;
-                    $fnameimg =~ s#\A\~/##;
-                    $fnameimg =~ s#\A/var/mobile/##;
-                    my $hashedfname = archive_fname('MediaDomain', $fnameimg);
-                    $fnameimg =~ s#.*/##;
-                    my $outfname = "$maildir/tmp/imessage-chatlog-tmp-$$-$msgid-$fnameimg.jpg";
-                    my $fmt = ($mimetype eq 'image/jpeg') ? '-f mjpeg' : '';
-                    my $cmdline = "ffmpeg $fmt -i '$hashedfname' -frames 1 -vf 'scale=235:-1' '$outfname' 2>/dev/null";
-                    print("generating thumbnail: $cmdline\n");
-                    die('ffmpeg failed') if (system($cmdline) != 0);
-                    my $fdata = undef;
-                    if ((not defined read_file($outfname, buf_ref => \$fdata, binmode => ':raw', err_mode => 'carp')) or (not defined $fdata)) {
-                        unlink($outfname);
-                        print STDERR "Couldn't read scaled attachment '$outfname': $!";
-                        $htmltext =~ s#\xEF\xBF\xBC#[Failed to scale image '$fnameimg']<br/>\n#;
+                    $fnameimg =~ s#\A\~/#$homedir/# if (not $ios_archive);
+                    $fnameimg =~ s#\A\~/## if ($ios_archive);
+                    $fnameimg =~ s#\A/var/mobile/## if ($ios_archive);
+                    my $domain = 'MediaDomain';
+                    my $hashedfname = $ios_archive ? archive_fname($domain, $fnameimg) : $fnameimg;
+                    if (not -f $hashedfname) {
+                        if ($ios_archive) {
+                            print STDERR "WARNING: Missing attachment '$hashedfname' ('$domain', '$fname')\n";
+                        } else {
+                            print STDERR "WARNING: Missing attachment '$hashedfname'\n";
+                        }
+                        $htmltext =~ s#\xEF\xBF\xBC#[Missing image '$fnameimg']<br/>\n#;
                     } else {
-                        unlink($outfname);
-                        my $base64 = encode_base64($fdata);
-                        $fdata = undef;
-                        $htmltext =~ s#\xEF\xBF\xBC#<center><img src='data:$mimetype;base64,$base64'/></center><br/>\n#;
-                        $base64 = undef;
+                        $fnameimg =~ s#.*/##;
+                        my $outfname = "$maildir/tmp/imessage-chatlog-tmp-$$-$msgid-$fnameimg.jpg";
+                        my $fmt = ($mimetype eq 'image/jpeg') ? '-f mjpeg' : '';
+                        my $transpose = $is_image ? 'transpose=1,' : '';
+                        my $cmdline = "ffmpeg $fmt -i '$hashedfname' -frames 1 -vf '${transpose}scale=235:-1' '$outfname' 2>/dev/null";
+                        dbgprint("generating thumbnail: $cmdline\n");
+                        die("ffmpeg failed ('$cmdline')") if (system($cmdline) != 0);
+                        my $fdata = undef;
+                        if ((not defined read_file($outfname, buf_ref => \$fdata, binmode => ':raw', err_mode => 'carp')) or (not defined $fdata)) {
+                            unlink($outfname);
+                            print STDERR "Couldn't read scaled attachment '$outfname': $!";
+                            $htmltext =~ s#\xEF\xBF\xBC#[Failed to scale image '$fnameimg']<br/>\n#;
+                        } else {
+                            unlink($outfname);
+                            my $base64 = encode_base64($fdata);
+                            $fdata = undef;
+                            $htmltext =~ s#\xEF\xBF\xBC#<center><img src='data:$mimetype;base64,$base64'/></center><br/>\n#;
+                            $base64 = undef;
+                        }
                     }
                 } else {
                     $htmltext =~ s#\xEF\xBF\xBC#[attachment $shortfname]<br/>\n#;
