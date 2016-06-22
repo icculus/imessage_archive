@@ -675,15 +675,17 @@ if ($ios_archive) {
     $addressbookdb = DBI->connect("DBI:SQLite:dbname=$addressbookdbname", '', '', { RaiseError => 0 })
         or fail("Couldn't open addressbook database at '$archivedir/$addressbookdbname': " . $DBI::errstr);
 
-    $lookupstmt = $addressbookdb->prepare('select c15Phone, c16Email, c11Nickname, c0First, c2Middle, c1Last from ABPersonFullTextSearch_content where ((c15Phone LIKE ?) or (c16Email LIKE ?)) limit 1;')
+    $lookupstmt = $addressbookdb->prepare('select c15Phone, c16Email, c11Nickname, c0First, c2Middle, c1Last from ABPersonFullTextSearch_content where ((c15Phone LIKE ?) or (c15Phone LIKE ?) or (c15Phone LIKE ?) or (c16Email LIKE ?) or (c16Email LIKE ?) or (c16Email LIKE ?)) limit 1;')
         or fail("Couldn't prepare name lookup SELECT statement: " . $DBI::errstr);
 }
 
 sub lookup_ios_address {
     my $address = shift;
-    my $like = "%$address%";
+    my $like1 = "$address %";
+    my $like2 = "% $address %";
+    my $like3 = "% $address";
 
-    $lookupstmt->execute($like, $like) or fail("Couldn't execute name lookup SELECT statement: " . $DBI::errstr);
+    $lookupstmt->execute($like1, $like2, $like3, $like1, $like2, $like3) or fail("Couldn't execute name lookup SELECT statement: " . $DBI::errstr);
 
     my @lookuprow = $lookupstmt->fetchrow_array();
     if (@lookuprow) {
@@ -736,6 +738,7 @@ if (not $ios_archive) {
             my $x = shift @lines;
             last if (not defined $x) || ($x eq '');
             $x =~ s/[^0-9]//g;  # flatten.
+            $x =~ s/\A1//;  # take out US country code
             $mac_addressbook{$x} = [ @person ];
             dbgprint("Person phone: [$x]\n");
         }
@@ -759,14 +762,13 @@ sub lookup_macos_address {
 
     # !!! FIXME: this all sucks.
     my $phone = $address;
-    $phone =~ s/\A\+1//;
     $phone =~ s/[^0-9]//g;  # flatten.
+    $phone =~ s/\A1//;  # remove US country code
     my $email = lc($address);
 
     my @lookuprow = ();
     foreach (keys(%mac_addressbook)) {
-        if ( (($email ne '') && (index($_, $email) != -1)) ||
-             (($phone ne '') && (index($_, $phone) != -1)) ) {
+        if ( ($_ eq $email) || ($_ eq $phone) ) {
             my $person = $mac_addressbook{$_};
             @lookuprow = @$person;
             last;
