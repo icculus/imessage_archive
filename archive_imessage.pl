@@ -204,7 +204,7 @@ sub set_image_orientation {
     my $orientation = shift;
     my $trash = shift;
     if (defined $orientation) {
-        my $cmdline = "$program_dir/exiftool/exiftool -q -n -Orientation=$orientation '$fname'";
+        my $cmdline = "$program_dir/exiftool/exiftool -overwrite_original_in_place -q -n -Orientation=$orientation '$fname'";
         dbgprint("marking image orientation: $cmdline\n");
         if (system($cmdline) != 0) {
             unlink($fname) if $trash;
