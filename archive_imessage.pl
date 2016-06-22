@@ -1092,8 +1092,8 @@ while (my @row = $stmt->fetchrow_array()) {
 
                         my $scale="$thumbnail_max_width:-1";
                         # Orientations 5-8 mean rotation between portrait and landscape, so we have to resize the "height" as it will actually be the width at the end.
-                        if (defined $orientation) && (($orientation >= 5) && ($orientation <= 8)) {
-                            my $scale="-1:$thumbnail_max_width";
+                        if ((defined $orientation) && (($orientation >= 5) && ($orientation <= 8))) {
+                            $scale="-1:$thumbnail_max_width";
                         }
 
                         my $outfname = "$maildir/tmp/imessage-chatlog-tmp-$$-$msgid-$fnameimg";
