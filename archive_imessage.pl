@@ -20,7 +20,7 @@ my $timezone = strftime('%Z', localtime());
 my $now = time();
 my $homedir = $ENV{'HOME'};
 my $program_dir = dirname($0);
-
+my $thumbnail_max_width = 235;
 
 # Fixes unicode dumping to stdio...hopefully you have a utf-8 terminal by now.
 #binmode(STDOUT, ":utf8");
@@ -1090,16 +1090,22 @@ while (my @row = $stmt->fetchrow_array()) {
                         $fnameimg =~ s#.*/##;
                         my $orientation = get_image_orientation($hashedfname);
 
+                        my $scale="$thumbnail_max_width:-1";
+                        # Orientations 5-8 mean rotation between portrait and landscape, so we have to resize the "height" as it will actually be the width at the end.
+                        if (defined $orientation) && (($orientation >= 5) && ($orientation <= 8)) {
+                            my $scale="-1:$thumbnail_max_width";
+                        }
+
                         my $outfname = "$maildir/tmp/imessage-chatlog-tmp-$$-$msgid-$fnameimg";
                         my $palettefname = undef;
                         my $cmdline;
                         if ($is_video) {
                             $outfname .= '.gif';
                             $palettefname = "$maildir/tmp/imessage-chatlog-tmp-$$-$msgid-palette-$fnameimg.png";
-                            $cmdline = "$program_dir/ffmpeg -y -i '$hashedfname' -vf 'fps=3,scale=235:-1:flags=lanczos,palettegen' '$palettefname' 2>/dev/null";
+                            $cmdline = "$program_dir/ffmpeg -y -i '$hashedfname' -vf 'fps=3,scale=$scale:flags=lanczos,palettegen' '$palettefname' 2>/dev/null";
                             dbgprint("Generating optimal palette for video->gif ($cmdline)...\n");
                             unlink($palettefname), die("ffmpeg failed ('$cmdline')") if (system($cmdline) != 0);
-                            $cmdline = "$program_dir/ffmpeg -i '$hashedfname' -i '$palettefname' -filter_complex 'fps=3,scale=235:-1:flags=lanczos[x];[x][1:v]paletteuse' '$outfname' 2>/dev/null";
+                            $cmdline = "$program_dir/ffmpeg -i '$hashedfname' -i '$palettefname' -filter_complex 'fps=3,scale=$scale:flags=lanczos[x];[x][1:v]paletteuse' '$outfname' 2>/dev/null";
                             $mimetype = 'image/gif';
                         } else {
                             my $is_jpeg = $mimetype eq 'image/jpeg';
@@ -1109,7 +1115,7 @@ while (my @row = $stmt->fetchrow_array()) {
                             my $frames = $is_gif ? '' : '-frames 1';   # Force to one frame, so movies just get a static image, but let animated gifs alone.
                             my $fmt = $is_jpeg ? '-f mjpeg' : '';
                             $outfname .= $ext;
-                            $cmdline = "$program_dir/ffmpeg $fmt -i '$hashedfname' $frames -vf 'scale=235:-1' '$outfname' 2>/dev/null";
+                            $cmdline = "$program_dir/ffmpeg $fmt -i '$hashedfname' $frames -vf 'scale=$scale' '$outfname' 2>/dev/null";
                         }
 
                         dbgprint("generating thumbnail: $cmdline\n");
