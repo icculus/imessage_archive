@@ -59,7 +59,7 @@ my $allow_thumbnails = 1;
 my $ios_archive = 0;
 
 sub usage {
-    print STDERR "USAGE: $0 [...options...] <backupdir> <maildir>\n";
+    print STDERR "USAGE: $0 [...options...] <messagedir> <maildir>\n";
     print STDERR "\n";
     print STDERR "    --debug: Enable spammy debug logging to stdout.\n";
     print STDERR "    --html: Output HTML archives.\n";
@@ -69,7 +69,7 @@ sub usage {
     print STDERR "    --no-attachments: Don't include attachments at all.\n";
     print STDERR "    --no-thumbnails: Don't include thumbnails in HTML output.\n";
     print STDERR "    --gap-time=NUM: treat NUM minutes of silence as the end of a conversation.\n";
-    print STDERR "    backupdir: Directory holding unencrypted iPhone backup.\n";
+    print STDERR "    messagedir: Directory holding iPhone backup or Messages chat.db database.\n";
     print STDERR "    maildir: Path of Maildir where we write archives and metadata.\n";
     print STDERR "\n";
     exit(1);
