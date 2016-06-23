@@ -103,6 +103,8 @@ if ((defined $attachment_shrink_percent) && ($attachment_shrink_percent == 100))
     fail("--attachments-shrink-percent must be between 1 and 100.");
 }
 
+dbgprint("\$now is $now.\n");
+
 sub archive_fname {
     my $domain = shift;
     my $name = shift;
@@ -267,6 +269,7 @@ sub flush_conversation {
     dbgprint("Flushing conversation! trash=$trash\n");
 
     if ($trash) {
+        $outmsgid = undef;
         $output_text = '';
         $output_html = '';
         @output_attachments = ();
@@ -910,7 +913,7 @@ while (my @row = $stmt->fetchrow_array()) {
     if (($now - $date) < $gaptime) {
         dbgprint("timestamp '$date' is less than $gaptime seconds old.\n");
         if ($msgid < $ending_startid) {
-            $ending_startid = ($startmsgid-1);
+            $ending_startid = $startmsgid - 1;
             dbgprint("forcing global startid to $ending_startid\n");
         }
         # trash this conversation, it might still be ongoing.
@@ -931,7 +934,9 @@ while (my @row = $stmt->fetchrow_array()) {
 
     # Try to merge collections that appear to be the same conversation...
     if (($handle_id != $lasthandle_id) or (talk_gap($lastdate, $date))) {
-        flush_conversation(0);
+        dbgprint("This appears to be a new conversation.\n");
+
+        flush_conversation(0);  # dump whatever might be pending.
 
         $account = $default_account if (not defined $account); # happens on old SMS messages.
         $account = $default_account if $account =~ /\A[ep]\:\Z/i;
@@ -1178,6 +1183,7 @@ while (my @row = $stmt->fetchrow_array()) {
     $outmsgid = $msgid;
 }
 
+dbgprint("Done running through all the messages in the database.\n");
 $db->disconnect();
 
 # Flush the final conversation if it's older than the talk gap.
@@ -1189,6 +1195,7 @@ if (($lastdate > 0) && talk_gap($lastdate, $now)) {
 
 # Update the global startid.
 if ($ending_startid != $startid) {
+    dbgprint("Flushing global startid: new=$ending_startid old=$startid\n");
     $startid = $ending_startid;
     flush_startid(undef, undef);
 }
@@ -1196,6 +1203,8 @@ if ($ending_startid != $startid) {
 if ($report_progress) {
     print("All completed conversations archived.\n");
 }
+
+dbgprint("bye bye!\n");
 
 exit(0);
 
