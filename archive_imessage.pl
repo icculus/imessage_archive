@@ -492,8 +492,8 @@ EOF
             my $mimetype = shift @output_attachments;
             my $domain = 'MediaDomain';
 
-            $fname =~ s#\A\~/#$homedir/# if (not $ios_archive);
-            $fname =~ s#\A\~/## if ($ios_archive);
+            $fname =~ s#\A\~/Library/Messages/## if (!$ios_archive);
+            $fname =~ s#\A\~/##;
             $fname =~ s#\A/var/mobile/## if ($ios_archive);
             my $hashedfname = archive_fname($domain, $fname);
 
