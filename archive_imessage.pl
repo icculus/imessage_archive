@@ -706,7 +706,7 @@ sub lookup_ios_address {
 my %mac_addressbook = ();
 if (not $ios_archive) {
     %mac_addressbook = ();
-    open(HELPERIO, '-|', "./dump_mac_addressbook") or die("Can't run ./dump_mac_addressbook: $!\n");
+    open(HELPERIO, '-|', "$program_dir/dump_mac_addressbook") or die("Can't run $program_dir/dump_mac_addressbook: $!\n");
 
     my @lines = ();
     while (<HELPERIO>) {
