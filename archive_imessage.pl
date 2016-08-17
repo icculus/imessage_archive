@@ -57,6 +57,7 @@ my $allow_video_attachments = 1;
 my $allow_attachments = 1;
 my $allow_thumbnails = 1;
 my $ios_archive = 0;
+my $mbox = 0;
 
 sub usage {
     print STDERR "USAGE: $0 [...options...] <messagedir> <maildir>\n";
@@ -69,8 +70,10 @@ sub usage {
     print STDERR "    --no-attachments: Don't include attachments at all.\n";
     print STDERR "    --no-thumbnails: Don't include thumbnails in HTML output.\n";
     print STDERR "    --gap-time=NUM: treat NUM minutes of silence as the end of a conversation.\n";
+    print STDERR "    --mbox: email archive should be in mbox format instead of Maildir.\n";
+    print STDERR "    --maildir: email archive should be in Maildir format instead of mbox.\n";
     print STDERR "    messagedir: Directory holding iPhone backup or Messages chat.db database.\n";
-    print STDERR "    maildir: Path of Maildir where we write archives and metadata.\n";
+    print STDERR "    maildir: Path of Maildir/mbox where we write archives and metadata.\n";
     print STDERR "\n";
     exit(1);
 }
@@ -88,6 +91,8 @@ foreach (@ARGV) {
     $allow_attachments = 0, next if $_ eq '--no-attachments';
     $allow_thumbnails = 1, next if $_ eq '--thumbnails';
     $allow_thumbnails = 0, next if $_ eq '--no-thumbnails';
+    $mbox = 1, next if $_ eq '--mbox';
+    $mbox = 0, next if $_ eq '--maildir';
     $attachment_shrink_percent = int($1), next if /\A--attachments-shrink-percent=(\d+)\Z/;
     $gaptime = int($1) * 60, next if /\A--gap-time=(\d+)\Z/;
     $archivedir = $_, next if not defined $archivedir;
@@ -563,20 +568,33 @@ EOF
     my $size = (stat($tmpemail))[7];
     my $t = $outtimestamp;
     my $outfile = "$t.$outid.imessage-chatlog.$imessageuser,S=$size";
-    $outfile =~ s#/#_#g;
-    $outfile = "$maildir/new/$outfile";
-    if (move($tmpemail, $outfile)) {
-        utime $t, $t, $outfile;  # force it to collection creation time.
-        dbgprint "archived '$outfile'\n";
-        system("cat $outfile") if ($debug);
+    if ($mbox) {
+        my $mboxtime = asctime(localtime($outtimestamp));
+        chomp($mboxtime);
+        print MBOX "From $imessageuser $mboxtime\n";
+        open(TMPEMAIL,'<',$tmpemail) or fail("Failed to open '$tmpemail': $!");
+        while (<TMPEMAIL>) {
+            s/\A(\>*From )/>$1/;
+            print MBOX $_;
+        }
+        close(TMPEMAIL);
+        unlink($tmpemail);
     } else {
-        unlink($outfile);
-        fail("Rename '$tmpemail' to '$outfile' failed: $!");
+        $outfile =~ s#/#_#g;
+        $outfile = "$maildir/new/$outfile";
+        if (move($tmpemail, $outfile)) {
+            utime $t, $t, $outfile;  # force it to collection creation time.
+            dbgprint "archived '$outfile'\n";
+            system("cat $outfile") if ($debug);
+        } else {
+            unlink($outfile);
+            fail("Rename '$tmpemail' to '$outfile' failed: $!");
+        }
     }
 
     # !!! FIXME: this may cause duplicates if there's a power failure RIGHT HERE.
     if (not flush_startid($outhandle_id, $outmsgid)) {
-        unlink($outfile);
+        unlink($outfile) if (not $mbox);
         fail("didn't flush startids");
     }
 }
@@ -831,6 +849,10 @@ $lookupstmt = undef;
 $addressbookdb->disconnect() if (defined $addressbookdb);
 $addressbookdb = undef;
 
+if ($mbox) {
+    my $mboxfname = "$maildir/imessage_archive.mbox";
+    open(MBOX, '>>', $mboxfname) or fail("Couldn't open '$mboxfname' for append: $!");
+}
 
 dbgprint("Parsing messages...\n");
 
@@ -1203,6 +1225,8 @@ if ($ending_startid != $startid) {
 if ($report_progress) {
     print("All completed conversations archived.\n");
 }
+
+close(MBOX) if ($mbox);
 
 dbgprint("bye bye!\n");
 
