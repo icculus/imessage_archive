@@ -57,6 +57,7 @@ my $allow_video_attachments = 1;
 my $allow_attachments = 1;
 my $allow_thumbnails = 1;
 my $ios_archive = 0;
+my $archive_version = 0;
 my $mbox = 0;
 
 sub usage {
@@ -117,7 +118,14 @@ sub archive_fname {
         my $combined = "$domain-$name";
         my $hashed = sha1_hex($combined);
         dbgprint("Hashed archived filename '$combined' to '$hashed'\n");
-        return "$archivedir/$hashed";
+        # iOS 10 (or maybe a new iTunes?) splits files into subdirs so they
+        #  don't have a thousand files in one places.
+        if ($archive_version >= 10) {
+            my $hashstart = substr($hashed, 0, 2);
+            return "$archivedir/$hashstart/$hashed";
+        } else {
+            return "$archivedir/$hashed";
+        }
     }
 
     return "$archivedir/$name";
@@ -127,6 +135,10 @@ sub archive_fname {
 fail("ERROR: Directory '$archivedir' doesn't exist.") if (not -d $archivedir);
 if (-f "$archivedir/Manifest.mbdb") {
     $ios_archive = 1;
+    $archive_version = 9;
+} elsif (-f "$archivedir/Manifest.db") {
+    $ios_archive = 1;
+    $archive_version = 10;  # iOS 10 changed this filename.
 } elsif (-f "$archivedir/chat.db") {
     $ios_archive = 0;
 } else {
@@ -134,7 +146,7 @@ if (-f "$archivedir/Manifest.mbdb") {
 }
 
 if ($ios_archive) {
-    dbgprint("Chat database is in an iOS backup.\n");
+    dbgprint("Chat database is in an iOS $archive_version backup.\n");
 } else {
     dbgprint("Chat database is in a macOS install.\n");
 }
