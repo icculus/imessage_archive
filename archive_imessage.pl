@@ -1096,6 +1096,8 @@ while (my @row = $stmt->fetchrow_array()) {
         while (my @attachmentrow = $attachmentstmt->fetchrow_array()) {
             my ($fname, $mimetype) = @attachmentrow;
 
+            $mimetype = '' if (not defined $mimetype);
+
             my $is_image = $mimetype =~ /\Aimage\//;
             my $is_video = $mimetype =~ /\Avideo\//;
 
