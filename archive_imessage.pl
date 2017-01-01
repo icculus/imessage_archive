@@ -119,7 +119,7 @@ sub archive_fname {
         my $hashed = sha1_hex($combined);
         dbgprint("Hashed archived filename '$combined' to '$hashed'\n");
         # iOS 10 (or maybe a new iTunes?) splits files into subdirs so they
-        #  don't have a thousand files in one places.
+        #  don't have a thousand files in one place.
         if ($archive_version >= 10) {
             my $hashstart = substr($hashed, 0, 2);
             return "$archivedir/$hashstart/$hashed";
