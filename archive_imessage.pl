@@ -708,8 +708,11 @@ if ($ios_archive) {
     $addressbookdb = DBI->connect("DBI:SQLite:dbname=$addressbookdbname", '', '', { RaiseError => 0 })
         or fail("Couldn't open addressbook database at '$archivedir/$addressbookdbname': " . $DBI::errstr);
 
-    $lookupstmt = $addressbookdb->prepare('select c15Phone, c16Email, c11Nickname, c0First, c2Middle, c1Last from ABPersonFullTextSearch_content where ((c15Phone LIKE ?) or (c15Phone LIKE ?) or (c15Phone LIKE ?) or (c16Email LIKE ?) or (c16Email LIKE ?) or (c16Email LIKE ?)) limit 1;')
-        or fail("Couldn't prepare name lookup SELECT statement: " . $DBI::errstr);
+    $lookupstmt = $addressbookdb->prepare('select c15Phone, c16Email, c11Nickname, c0First, c2Middle, c1Last from ABPersonFullTextSearch_content where ((c15Phone LIKE ?) or (c15Phone LIKE ?) or (c15Phone LIKE ?) or (c16Email LIKE ?) or (c16Email LIKE ?) or (c16Email LIKE ?)) limit 1;');
+    if (not $lookupstmt) {  # this changed in iOS 10.2
+        $lookupstmt = $addressbookdb->prepare('select c16Phone, c17Email, c12Nickname, c0First, c2Middle, c1Last from ABPersonFullTextSearch_content where ((c16Phone LIKE ?) or (c16Phone LIKE ?) or (c16Phone LIKE ?) or (c17Email LIKE ?) or (c17Email LIKE ?) or (c17Email LIKE ?)) limit 1;')
+            or fail("Couldn't prepare name lookup SELECT statement: " . $DBI::errstr);
+    }
 }
 
 sub lookup_ios_address {
