@@ -257,6 +257,13 @@ sub load_attachment {
 
     my $is_image = $mimetype =~ /\Aimage\//;
     my $is_video = $mimetype =~ /\Avideo\//;
+
+    # Temporary hack to make iPhone PNGs ( http://iphonedevwiki.net/index.php/CgBI_file_format ) look like normal PNGs.
+    if ($is_image) {
+        system("$program_dir/pngdefry -s-defried '$hashedfname' >/dev/null");
+        move("$hashedfname-defried.png", $hashedfname) if ( -f "$hashedfname-defried.png");
+    }
+
     if ((defined $attachment_shrink_percent) && ($is_image || $is_video)) {
         my $is_jpeg = check_jpegness($mimetype, $hashedfname);
         my $fmt = $is_jpeg ? '-f mjpeg' : '';
@@ -1154,6 +1161,12 @@ while (my @row = $stmt->fetchrow_array()) {
                         }
                         $htmltext =~ s#\xEF\xBF\xBC#[Missing image '$fnameimg']<br/>\n#;
                     } else {
+                        # Temporary hack to make iPhone PNGs ( http://iphonedevwiki.net/index.php/CgBI_file_format ) look like normal PNGs.
+                        if ($is_image) {
+                            system("$program_dir/pngdefry -s-defried '$hashedfname' >/dev/null");
+                            move("$hashedfname-defried.png", $hashedfname) if ( -f "$hashedfname-defried.png");
+                        }
+
                         $fnameimg =~ s#.*/##;
                         my $orientation = get_image_orientation($hashedfname);
 

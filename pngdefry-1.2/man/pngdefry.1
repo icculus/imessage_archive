@@ -1,0 +1,80 @@
+.\"Modified from man(1) of FreeBSD, the NetBSD mdoc.template, and mdoc.samples.
+.\"See Also:
+.\"man mdoc.samples for a complete listing of options
+.\"man mdoc for the short list of editing options
+.\"/usr/share/misc/mdoc.template
+.Dd 22/1/12               \" DATE 
+.Dt pngdefry 1      \" Program name and manual section number 
+.Os OSX 10.7.2
+.Sh NAME                 \" Section Header - required - don't modify 
+.Nm pngdefry
+.Nd Removes -iphone optimization from PNG images.
+.Sh SYNOPSIS             \" Section Header - required - don't modify
+.Nm
+.Op Fl s Ar suffix
+.Op Fl o Ar path
+.Op Fl i Ar size
+.Op Fl alvpd          \" [-abcd]
+.Op Fl
+.Ar file              \" [file]
+.Op Ar file ...
+.Sh OPTIONS
+.Bl -tag -width -indent  \" Differs from above in tag removed 
+.It Fl s Ar suffix                 \"-a flag as a list item
+Appends 
+.Pa suffix
+to the original filename to create the output filename.
+.It Fl o Ar path
+Writes output file(s) to 
+.Pa path .
+Note: without
+.Fl s
+or
+.Fl o ,
+NO output will be created.
+.It Fl i Ar size
+Max IDAT chunk size in bytes (minimum: 1024; default: 524288).
+.It Fl a
+Do NOT de-multiply alpha. Default is it does.
+.It Fl l
+Lists all chunks.
+.It Fl v
+Verbose processing.
+.It Fl p
+Processes all files, not just 
+.Fl iphone
+compressed ones (for debugging purposes only).
+.It Fl d
+Very verbose processing (for debugging purposes only).
+.It Fl
+End the list of arguments if the first filename starts with an '-'.
+.El                      \" Ends the list
+.Sh DESCRIPTION          \" Section Header - required - don't modify
+.Nm
+attempts to remove 
+.Fl iphone
+optimization from PNG files that are processed with Apple's modified
+.Xr pngcrush .
+.Pp
+It removes the private critical data chunk 
+.Li CgBI
+if this is at the very start of the PNG file, unpacks
+.Li IDAT
+chunks, reverses BGR(A) pixel order to RGB(A), undoes pre-multiplied alpha, repacks
+.Li IDAT
+chunks, and outputs all to a new file.
+This is a command-line program with batch capabilities (e.g., 
+.Li pngdefry *.png
+).
+.Sh SEE ALSO 
+.Xr pngcheck 1 , 
+.Xr pngcrush 1 
+.\" .Sh BUGS              \" Document known, unremedied bugs
+.\" To follow, I guess.
+.\" .Sh HISTORY           \" Document history if command behaves in a unique manner
+.Sh AUTHOR
+.Nm
+is written by
+.An Jongware Aq jongware@hotmail.com
+
+For more information and updates, please visit <http://www.jongware.com/pngdefry.html>
