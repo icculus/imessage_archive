@@ -934,6 +934,12 @@ while (my @row = $stmt->fetchrow_array()) {
     my ($idname, $msgid, $text, $service, $account, $handle_id, $subject, $date, $is_emote, $is_from_me, $was_downgraded, $is_audio_message, $cache_has_attachments) = @row;
     next if not defined $text;
 
+    # This is probably from after Apple moved from seconds to nanoseconds
+    #  (High Sierra and equivalent iOS releases).
+    if ($date > 99999999999) {
+        $date /= 1000000000;
+    }
+
     # Convert from Cocoa epoch to Unix epoch (2001 -> 1970).
     $date += 978307200;
 
