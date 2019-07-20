@@ -232,6 +232,23 @@ sub set_image_orientation {
     }
 }
 
+# I ran into an attachment that iOS labeled as 'image/png' but it was actually
+#  a legal (and not weird as far as I can tell) .jpg file. So read the first
+#  few bytes and see if it's a jpeg magic number. Maybe we should do this for
+#  other formats too?
+sub check_jpegness {
+    my $mimetype = shift;
+    my $fname = shift;
+    return 1 if $mimetype eq 'image/jpeg';  # we'll believe them for now.
+    return 0 if not open my $fh, '<:raw', $fname;  # oh well.
+    my $bytes_read = read $fh, my $bytes, 2;
+    close $fh;
+    return 0 if $bytes_read != 2;
+    my ($b1, $b2) = unpack 'C C', $bytes;
+    return $b1 == 0xFF && $b2 == 0xD8;
+}
+
+
 sub load_attachment {
     my $origfname = shift;
     my $hashedfname = shift;
@@ -241,7 +258,7 @@ sub load_attachment {
     my $is_image = $mimetype =~ /\Aimage\//;
     my $is_video = $mimetype =~ /\Avideo\//;
     if ((defined $attachment_shrink_percent) && ($is_image || $is_video)) {
-        my $is_jpeg = $mimetype eq 'image/jpeg';
+        my $is_jpeg = check_jpegness($mimetype, $hashedfname);
         my $fmt = $is_jpeg ? '-f mjpeg' : '';
         my $orientation = get_image_orientation($hashedfname);
         my $fract = $attachment_shrink_percent / 100.0;
@@ -1158,7 +1175,7 @@ while (my @row = $stmt->fetchrow_array()) {
                             $cmdline = "$program_dir/ffmpeg -i '$hashedfname' -i '$palettefname' -filter_complex 'fps=3,scale=$scale:flags=lanczos[x];[x][1:v]paletteuse' '$outfname' 2>/dev/null";
                             $mimetype = 'image/gif';
                         } else {
-                            my $is_jpeg = $mimetype eq 'image/jpeg';
+                            my $is_jpeg = check_jpegness($mimetype, $hashedfname);
                             my $is_gif = $mimetype eq 'image/gif';
                             my $ext = $is_gif ? '.gif' : '.jpg';   # force everything to a .jpg thumbnail, except .gifs, since they are well-supported and might be animated.
                             $mimetype = $is_gif ? 'image/gif' : 'image/jpeg';
